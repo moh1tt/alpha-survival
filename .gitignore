@@ -2,7 +2,7 @@
 .env
 
 # Data: raw vendor data must never be committed (licence + size)
-data/
+/data/
 *.parquet
 *.duckdb
 
