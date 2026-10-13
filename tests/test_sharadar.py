@@ -62,8 +62,10 @@ def test_unknown_table_fails(tmp_path):
         sharadar.download_table("NOPE", out_dir=tmp_path, fetch=fake_sep)
 
 
-def test_missing_api_key_gives_clear_error(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)  # no .env here
+def test_missing_api_key_gives_clear_error(monkeypatch):
+    # load_dotenv searches upward from the caller's file, so it would find a real
+    # repo .env regardless of cwd. Stub it out: we're testing the error, not lookup.
+    monkeypatch.setattr(sharadar, "load_dotenv", lambda: None)
     monkeypatch.delenv(sharadar.API_KEY_VAR, raising=False)
     with pytest.raises(RuntimeError, match=sharadar.API_KEY_VAR):
         sharadar.load_api_key()
