@@ -233,3 +233,118 @@ def test_actions_for_securities_outside_master_are_ignored():
     actions = action_rows("SOMEETF", ["2024-02-12"], ["delisted"])
     out = real.add_delisting_returns(monthly, actions, master_with_exchange(AAA="NYSE"))
     assert out["ret"].iloc[0] == pytest.approx(0.10)
+
+
+# --- point-in-time fundamentals ----------------------------------------------
+
+
+def sf1_rows(ticker, datekeys, reportperiods, revenue, dimension="ART"):
+    return pd.DataFrame(
+        {
+            "ticker": ticker,
+            "dimension": dimension,
+            "datekey": pd.to_datetime(datekeys),
+            "reportperiod": pd.to_datetime(reportperiods),
+            "lastupdated": pd.Timestamp("2026-07-31"),
+            "revenue": revenue,
+        }
+    )
+
+
+def keys_for(permaticker, month_ends):
+    return pd.DataFrame({"permaticker": permaticker, "month_end": pd.to_datetime(month_ends)})
+
+
+MONTHS = ["2024-01-31", "2024-02-29", "2024-03-31"]
+
+
+def test_filing_is_used_only_after_it_became_public():
+    # FY2023 ended Dec 31 but was filed Feb 14: January must not see it.
+    sf1 = sf1_rows("AAA", ["2024-02-14"], ["2023-12-31"], [500.0])
+    out = real.build_fundamentals(sf1, master_for("AAA"), keys_for(1, MONTHS))
+    assert pd.isna(out["revenue"].iloc[0])
+    assert list(out["revenue"].iloc[1:]) == [500.0, 500.0]
+
+
+def test_filing_on_month_end_waits_until_next_month():
+    # Filed on Jan 31 (maybe after the close): not usable for the Jan 31 rebalance.
+    sf1 = sf1_rows("AAA", ["2024-01-31"], ["2023-12-31"], [500.0])
+    out = real.build_fundamentals(sf1, master_for("AAA"), keys_for(1, MONTHS))
+    assert pd.isna(out["revenue"].iloc[0])
+    assert out["revenue"].iloc[1] == 500.0
+
+
+def test_later_filing_does_not_rewrite_earlier_months():
+    # An amended filing for the same period applies from its own datekey onward only.
+    sf1 = sf1_rows(
+        "AAA", ["2024-01-10", "2024-03-05"], ["2023-12-31", "2023-12-31"], [500.0, 450.0]
+    )
+    out = real.build_fundamentals(sf1, master_for("AAA"), keys_for(1, MONTHS))
+    assert list(out["revenue"]) == [500.0, 500.0, 450.0]
+
+
+def test_no_month_uses_a_filing_from_its_future():
+    sf1 = sf1_rows(
+        "AAA",
+        ["2023-11-02", "2024-01-31", "2024-02-28", "2024-03-30"],
+        ["2023-09-30", "2023-12-31", "2023-12-31", "2024-03-29"],
+        [1.0, 2.0, 3.0, 4.0],
+    )
+    out = real.build_fundamentals(sf1, master_for("AAA"), keys_for(1, MONTHS)).dropna()
+    assert (out["filing_date"] < out["month_end"]).all()
+
+
+def test_stocks_do_not_bleed_into_each_other_fundamentals():
+    sf1 = pd.concat(
+        [
+            sf1_rows("AAA", ["2024-01-10"], ["2023-12-31"], [500.0]),
+            sf1_rows("BBB", ["2024-02-10"], ["2023-12-31"], [70.0]),
+        ]
+    )
+    keys = pd.concat([keys_for(1, MONTHS[:2]), keys_for(2, MONTHS[:2])])
+    out = real.build_fundamentals(sf1, master_for("AAA", "BBB"), keys)
+    bbb = out[out["permaticker"] == 2]
+    assert pd.isna(bbb["revenue"].iloc[0])  # BBB had no filing yet in January
+    assert bbb["revenue"].iloc[1] == 70.0
+
+
+def test_other_dimensions_are_ignored():
+    sf1 = pd.concat(
+        [
+            sf1_rows("AAA", ["2024-01-10"], ["2023-12-31"], [500.0], dimension="ART"),
+            sf1_rows("AAA", ["2024-01-10"], ["2023-12-31"], [130.0], dimension="ARQ"),
+        ]
+    )
+    out = real.build_fundamentals(sf1, master_for("AAA"), keys_for(1, MONTHS[:1]))
+    assert out["revenue"].iloc[0] == 500.0
+
+
+def test_output_columns_exclude_vendor_bookkeeping():
+    sf1 = sf1_rows("AAA", ["2024-01-10"], ["2023-12-31"], [500.0])
+    out = real.build_fundamentals(sf1, master_for("AAA"), keys_for(1, MONTHS[:1]))
+    assert list(out.columns) == ["permaticker", "month_end", "filing_date", "period_end", "revenue"]
+
+
+@pytest.mark.parametrize("dimension", ["MRQ", "MRT", "MRY"])
+def test_restated_dimensions_raise(dimension):
+    sf1 = sf1_rows("AAA", ["2024-01-10"], ["2023-12-31"], [500.0], dimension=dimension)
+    with pytest.raises(ValueError, match="not point-in-time"):
+        real.build_fundamentals(sf1, master_for("AAA"), keys_for(1, MONTHS), dimension)
+
+
+def test_duplicate_filing_rows_raise():
+    sf1 = sf1_rows("AAA", ["2024-01-10", "2024-01-10"], ["2023-12-31", "2023-12-31"], [1.0, 2.0])
+    with pytest.raises(ValueError, match="duplicate"):
+        real.build_fundamentals(sf1, master_for("AAA"), keys_for(1, MONTHS))
+
+
+def test_filing_before_period_end_raises():
+    sf1 = sf1_rows("AAA", ["2023-12-01"], ["2023-12-31"], [500.0])
+    with pytest.raises(ValueError, match="before their period ended"):
+        real.build_fundamentals(sf1, master_for("AAA"), keys_for(1, MONTHS))
+
+
+def test_unmapped_sf1_ticker_raises():
+    sf1 = sf1_rows("ZZZ", ["2024-01-10"], ["2023-12-31"], [500.0])
+    with pytest.raises(ValueError, match="missing from security master"):
+        real.build_fundamentals(sf1, master_for("AAA"), keys_for(1, MONTHS))

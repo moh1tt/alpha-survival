@@ -161,3 +161,87 @@ def load_monthly_returns(raw_dir: Path = RAW_DIR) -> pd.DataFrame:
     master = load_security_master(raw_dir)
     monthly = build_monthly_returns(pd.read_parquet(raw_dir / "SEP.parquet"), master)
     return add_delisting_returns(monthly, pd.read_parquet(raw_dir / "ACTIONS.parquet"), master)
+
+
+# SF1 "dimensions": AR* = as reported (one row per original filing, dated by when it
+# became public). MR* = most recent, i.e. silently restated later; its numbers were
+# never visible on the date they sit at, so MR* is unusable for backtests.
+POINT_IN_TIME_DIMENSIONS = {"ARQ", "ART", "ARY"}
+
+# Filings often land after the close, so a filing is usable from the day after
+# its datekey, never on the datekey itself.
+AVAILABILITY_LAG = pd.Timedelta(days=1)
+
+# SF1 identifier/date columns; every other numeric column is a fundamental value.
+# `lastupdated` is when Sharadar last touched the row: a future date, never a feature.
+SF1_ID_COLUMNS = {
+    "ticker",
+    "dimension",
+    "calendardate",
+    "datekey",
+    "reportperiod",
+    "fiscalperiod",
+    "lastupdated",
+}
+
+
+def build_fundamentals(
+    sf1: pd.DataFrame, master: pd.DataFrame, keys: pd.DataFrame, dimension: str = "ART"
+) -> pd.DataFrame:
+    """Attach to each (permaticker, month_end) in `keys` the latest filing public before it.
+
+    Aligns on `datekey` (the date the filing became public), not on the fiscal
+    period: Q4 numbers for December are not known until February. Default ART
+    (trailing twelve months, as reported) smooths seasonal quarters.
+
+    Columns: permaticker, month_end, filing_date, period_end, then the SF1 values.
+    `filing_date` lets later steps drop stale fundamentals.
+    """
+    if dimension not in POINT_IN_TIME_DIMENSIONS:
+        raise ValueError(
+            f"Dimension {dimension!r} is not point-in-time; use one of "
+            f"{sorted(POINT_IN_TIME_DIMENSIONS)}"
+        )
+    rows = sf1[sf1["dimension"] == dimension]
+
+    if rows.duplicated(["ticker", "datekey"]).any():
+        raise ValueError(f"SF1 {dimension} has duplicate (ticker, datekey) rows")
+    if (rows["datekey"] < rows["reportperiod"]).any():
+        raise ValueError("SF1 has filings dated before their period ended")
+
+    ids = master.set_index("ticker")["permaticker"]
+    unmapped = set(rows["ticker"]) - set(ids.index)
+    if unmapped:
+        raise ValueError(f"SF1 tickers missing from security master: {sorted(unmapped)[:10]}")
+
+    values = [c for c in rows.select_dtypes("number").columns if c not in SF1_ID_COLUMNS]
+    filings = rows[["ticker", "datekey", "reportperiod", *values]].rename(
+        columns={"datekey": "filing_date", "reportperiod": "period_end"}
+    )
+    filings = filings.assign(
+        permaticker=filings["ticker"].map(ids),
+        # merge_asof needs both date columns at the same resolution.
+        available_date=(filings["filing_date"] + AVAILABILITY_LAG).astype("datetime64[ns]"),
+    ).drop(columns="ticker")
+
+    left = keys[["permaticker", "month_end"]].astype({"month_end": "datetime64[ns]"})
+    # "Latest filing with available_date <= month_end", per stock.
+    out = pd.merge_asof(
+        left.sort_values("month_end"),
+        filings.sort_values("available_date"),
+        left_on="month_end",
+        right_on="available_date",
+        by="permaticker",
+        direction="backward",
+    ).drop(columns="available_date")
+
+    cols = ["permaticker", "month_end", "filing_date", "period_end", *values]
+    return out[cols].sort_values(["permaticker", "month_end"]).reset_index(drop=True)
+
+
+def load_fundamentals(
+    keys: pd.DataFrame, raw_dir: Path = RAW_DIR, dimension: str = "ART"
+) -> pd.DataFrame:
+    """Read SF1 + TICKERS from disk and build point-in-time fundamentals for `keys`."""
+    master = load_security_master(raw_dir)
+    return build_fundamentals(pd.read_parquet(raw_dir / "SF1.parquet"), master, keys, dimension)
