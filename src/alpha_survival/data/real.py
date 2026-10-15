@@ -6,6 +6,7 @@ vendor columns, so swapping the data source means changing just this file.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -106,7 +107,57 @@ def build_monthly_returns(sep: pd.DataFrame, master: pd.DataFrame) -> pd.DataFra
     return monthly[["permaticker", "month_end", "ret", "last_trade_date"]].reset_index(drop=True)
 
 
+# Sharadar ACTIONS types where shareholders likely lost money on exit. Names verified
+# against SHARADAR/INDICATORS (table=ACTIONTYPES); for all four, `date` is the last
+# trade date. Acquisitions/mergers are not here: the last price already reflects
+# the deal, so their delisting return is ~0 and we leave them alone.
+DISTRESS_EXITS = {"bankruptcyliquidation", "regulatorydelisting", "voluntarydelisting", "delisted"}
+
+# Average return after a performance delisting, which the last price misses.
+# NYSE/AMEX: Shumway (1997); Nasdaq: Shumway & Warther (1999).
+DELISTING_PENALTY = {"NYSE": -0.30, "NYSEMKT": -0.30, "NASDAQ": -0.55}
+DEFAULT_DELISTING_PENALTY = -0.30  # the few BATS/OTC/NYSEARCA names
+
+
+def add_delisting_returns(
+    monthly: pd.DataFrame, actions: pd.DataFrame, master: pd.DataFrame
+) -> pd.DataFrame:
+    """Compound a delisting penalty into the exit month of stocks that died in distress.
+
+    Without this, a stock that goes bankrupt mid-month shows only the fall up to
+    its last trade; the further loss to shareholders vanishes and distressed
+    stocks look better than they were (Shumway 1997).
+
+    Adds `delist_action` (the exit type, or NA) so later reports can count them.
+    """
+    exits = actions.loc[actions["action"].isin(DISTRESS_EXITS), ["ticker", "date", "action"]]
+    exits = exits.merge(master[["ticker", "permaticker", "exchange"]], on="ticker")
+    # A stock can get several exit rows (e.g. regulatory delisting, then bankruptcy):
+    # penalise it once, using the latest.
+    exits = exits.sort_values("date").drop_duplicates("permaticker", keep="last")
+    exits["month_end"] = exits["date"].dt.to_period("M").dt.to_timestamp(how="end").dt.normalize()
+    exits["penalty"] = exits["exchange"].map(DELISTING_PENALTY).fillna(DEFAULT_DELISTING_PENALTY)
+
+    out = monthly.merge(
+        exits[["permaticker", "month_end", "action", "penalty"]],
+        on=["permaticker", "month_end"],
+        how="left",
+        validate="one_to_one",
+    )
+    hit = out["penalty"].notna()
+    out.loc[hit, "ret"] = (1 + out.loc[hit, "ret"]) * (1 + out.loc[hit, "penalty"]) - 1
+
+    unmatched = len(exits[exits["permaticker"].isin(monthly["permaticker"])]) - hit.sum()
+    if unmatched:
+        warnings.warn(
+            f"{unmatched} distress exits have no price row in their exit month; not penalised",
+            stacklevel=2,
+        )
+    return out.rename(columns={"action": "delist_action"}).drop(columns="penalty")
+
+
 def load_monthly_returns(raw_dir: Path = RAW_DIR) -> pd.DataFrame:
-    """Read `SEP.parquet` and build monthly returns keyed on the security master."""
-    sep = pd.read_parquet(raw_dir / "SEP.parquet")
-    return build_monthly_returns(sep, load_security_master(raw_dir))
+    """Read SEP + ACTIONS and build delisting-adjusted monthly returns."""
+    master = load_security_master(raw_dir)
+    monthly = build_monthly_returns(pd.read_parquet(raw_dir / "SEP.parquet"), master)
+    return add_delisting_returns(monthly, pd.read_parquet(raw_dir / "ACTIONS.parquet"), master)

@@ -153,3 +153,83 @@ def test_duplicate_price_rows_raise():
     sep = sep_rows("AAA", ["2024-01-31", "2024-01-31"], [100.0, 101.0])
     with pytest.raises(ValueError, match="duplicate"):
         real.build_monthly_returns(sep, master_for("AAA"))
+
+
+# --- delisting returns -----------------------------------------------------
+
+
+def monthly_rows(permaticker, month_ends, rets):
+    return pd.DataFrame(
+        {"permaticker": permaticker, "month_end": pd.to_datetime(month_ends), "ret": rets}
+    )
+
+
+def master_with_exchange(**ticker_to_exchange):
+    return pd.DataFrame(
+        {
+            "ticker": list(ticker_to_exchange),
+            "permaticker": range(1, len(ticker_to_exchange) + 1),
+            "exchange": list(ticker_to_exchange.values()),
+        }
+    )
+
+
+def action_rows(ticker, dates, actions):
+    return pd.DataFrame({"ticker": ticker, "date": pd.to_datetime(dates), "action": actions})
+
+
+def test_bankruptcy_on_nyse_compounds_minus_30pct():
+    monthly = monthly_rows(1, ["2024-01-31", "2024-02-29"], [0.05, -0.50])
+    actions = action_rows("AAA", ["2024-02-12"], ["bankruptcyliquidation"])
+    out = real.add_delisting_returns(monthly, actions, master_with_exchange(AAA="NYSE"))
+    assert out["ret"].iloc[0] == pytest.approx(0.05)  # earlier month untouched
+    assert out["ret"].iloc[1] == pytest.approx(0.5 * 0.7 - 1)
+    assert out["delist_action"].iloc[1] == "bankruptcyliquidation"
+
+
+def test_nasdaq_penalty_is_minus_55pct():
+    monthly = monthly_rows(1, ["2024-02-29"], [0.0])
+    actions = action_rows("AAA", ["2024-02-12"], ["regulatorydelisting"])
+    out = real.add_delisting_returns(monthly, actions, master_with_exchange(AAA="NASDAQ"))
+    assert out["ret"].iloc[0] == pytest.approx(-0.55)
+
+
+def test_unknown_exchange_uses_default_penalty():
+    monthly = monthly_rows(1, ["2024-02-29"], [0.0])
+    actions = action_rows("AAA", ["2024-02-12"], ["delisted"])
+    out = real.add_delisting_returns(monthly, actions, master_with_exchange(AAA="BATS"))
+    assert out["ret"].iloc[0] == pytest.approx(real.DEFAULT_DELISTING_PENALTY)
+
+
+def test_acquisition_is_not_penalised():
+    monthly = monthly_rows(1, ["2024-02-29"], [0.20])
+    actions = action_rows("AAA", ["2024-02-12"], ["acquisitionby"])
+    out = real.add_delisting_returns(monthly, actions, master_with_exchange(AAA="NYSE"))
+    assert out["ret"].iloc[0] == pytest.approx(0.20)
+    assert pd.isna(out["delist_action"].iloc[0])
+
+
+def test_several_exit_rows_penalise_once():
+    monthly = monthly_rows(1, ["2024-02-29"], [0.0])
+    actions = action_rows(
+        "AAA", ["2024-02-09", "2024-02-12"], ["regulatorydelisting", "bankruptcyliquidation"]
+    )
+    out = real.add_delisting_returns(monthly, actions, master_with_exchange(AAA="NYSE"))
+    assert out["ret"].iloc[0] == pytest.approx(-0.30)
+    assert len(out) == 1
+
+
+def test_exit_without_price_row_warns_and_is_not_applied():
+    monthly = monthly_rows(1, ["2024-01-31"], [0.10])
+    actions = action_rows("AAA", ["2024-03-15"], ["delisted"])
+    with pytest.warns(UserWarning, match="1 distress exits"):
+        out = real.add_delisting_returns(monthly, actions, master_with_exchange(AAA="NYSE"))
+    assert out["ret"].iloc[0] == pytest.approx(0.10)
+
+
+def test_actions_for_securities_outside_master_are_ignored():
+    # ACTIONS also covers funds etc. that aren't in our stock universe.
+    monthly = monthly_rows(1, ["2024-02-29"], [0.10])
+    actions = action_rows("SOMEETF", ["2024-02-12"], ["delisted"])
+    out = real.add_delisting_returns(monthly, actions, master_with_exchange(AAA="NYSE"))
+    assert out["ret"].iloc[0] == pytest.approx(0.10)
