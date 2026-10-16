@@ -27,16 +27,16 @@ SECURITY_MASTER_COLUMNS = {
 
 
 def build_security_master(tickers: pd.DataFrame) -> pd.DataFrame:
-    """Turn the raw TICKERS table into one row per stock, keyed on `permaticker`.
+    """Turn the raw `tickers` table into one row per stock, keyed on `permaticker`.
 
     Tickers get renamed and reused, so `permaticker` (permanent per company) is
     the key everything else joins on. Delisted stocks are kept on purpose:
     dropping them is survivorship bias.
     """
-    # TICKERS repeats each stock once per Sharadar table (SEP, SF1, SF2...).
-    # The SEP row describes the price history, which is what we trade on.
-    sep = tickers.loc[tickers["table"] == "SEP", list(SECURITY_MASTER_COLUMNS)]
-    master = sep.rename(columns=SECURITY_MASTER_COLUMNS)
+    # `tickers` repeats each stock once per Sharadar table (stocks, fundamentals,
+    # insiders...). The `stocks` row describes the price history we trade on.
+    priced = tickers.loc[tickers["table"] == "stocks", list(SECURITY_MASTER_COLUMNS)]
+    master = priced.rename(columns=SECURITY_MASTER_COLUMNS)
 
     dupes = master["permaticker"].duplicated(keep=False)
     if dupes.any():
@@ -54,12 +54,12 @@ def build_security_master(tickers: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_security_master(raw_dir: Path = RAW_DIR) -> pd.DataFrame:
-    """Read `TICKERS.parquet` from disk and build the security master."""
-    return build_security_master(pd.read_parquet(raw_dir / "TICKERS.parquet"))
+    """Read `tickers.parquet` from disk and build the security master."""
+    return build_security_master(pd.read_parquet(raw_dir / "tickers.parquet"))
 
 
-def build_monthly_returns(sep: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
-    """Turn daily SEP prices into one total return per stock per calendar month.
+def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
+    """Turn daily `stocks` prices into one total return per stock per calendar month.
 
     The return for month m runs from the last close in month m-1 to the last
     close in month m. Returns are computed from `closeadj` (split + dividend
@@ -70,17 +70,17 @@ def build_monthly_returns(sep: pd.DataFrame, master: pd.DataFrame) -> pd.DataFra
     Columns: permaticker, month_end, ret, last_trade_date.
     `last_trade_date` lets later steps spot stale prices (no trade near month end).
     """
-    if sep.duplicated(["ticker", "date"]).any():
-        raise ValueError("SEP has duplicate (ticker, date) rows")
+    if stocks.duplicated(["ticker", "date"]).any():
+        raise ValueError("stocks has duplicate (ticker, date) rows")
 
-    # SEP is keyed by ticker; map to the permanent ID. Sharadar keeps tickers
+    # `stocks` is keyed by ticker; map to the permanent ID. Sharadar keeps tickers
     # unique by suffixing reused ones (e.g. "ABC1"), so this mapping is 1:1.
     ids = master.set_index("ticker")["permaticker"]
-    unmapped = set(sep["ticker"]) - set(ids.index)
+    unmapped = set(stocks["ticker"]) - set(ids.index)
     if unmapped:
-        raise ValueError(f"SEP tickers missing from security master: {sorted(unmapped)[:10]}")
+        raise ValueError(f"stocks tickers missing from security master: {sorted(unmapped)[:10]}")
 
-    daily = sep[["ticker", "date", "closeadj"]].assign(
+    daily = stocks[["ticker", "date", "closeadj"]].assign(
         permaticker=lambda d: d["ticker"].map(ids),
         month=lambda d: d["date"].dt.to_period("M"),
     )
@@ -107,10 +107,11 @@ def build_monthly_returns(sep: pd.DataFrame, master: pd.DataFrame) -> pd.DataFra
     return monthly[["permaticker", "month_end", "ret", "last_trade_date"]].reset_index(drop=True)
 
 
-# Sharadar ACTIONS types where shareholders likely lost money on exit. Names verified
-# against SHARADAR/INDICATORS (table=ACTIONTYPES); for all four, `date` is the last
-# trade date. Acquisitions/mergers are not here: the last price already reflects
-# the deal, so their delisting return is ~0 and we leave them alone.
+# Sharadar `actions` types where shareholders likely lost money on exit. Names verified
+# against the Nasdaq-era action-type list (re-check on the direct API once we have
+# delisted names); for all four, `date` is the last trade date. Acquisitions/mergers
+# are not here: the last price already reflects the deal, so their delisting
+# return is ~0 and we leave them alone.
 DISTRESS_EXITS = {"bankruptcyliquidation", "regulatorydelisting", "voluntarydelisting", "delisted"}
 
 # Average return after a performance delisting, which the last price misses.
@@ -157,28 +158,29 @@ def add_delisting_returns(
 
 
 def load_monthly_returns(raw_dir: Path = RAW_DIR) -> pd.DataFrame:
-    """Read SEP + ACTIONS and build delisting-adjusted monthly returns."""
+    """Read `stocks` + `actions` and build delisting-adjusted monthly returns."""
     master = load_security_master(raw_dir)
-    monthly = build_monthly_returns(pd.read_parquet(raw_dir / "SEP.parquet"), master)
-    return add_delisting_returns(monthly, pd.read_parquet(raw_dir / "ACTIONS.parquet"), master)
+    monthly = build_monthly_returns(pd.read_parquet(raw_dir / "stocks.parquet"), master)
+    return add_delisting_returns(monthly, pd.read_parquet(raw_dir / "actions.parquet"), master)
 
 
-# SF1 "dimensions": AR* = as reported (one row per original filing, dated by when it
+# `fundamentals` "dimensions": AR* = as reported (one row per original filing, dated by when it
 # became public). MR* = most recent, i.e. silently restated later; its numbers were
 # never visible on the date they sit at, so MR* is unusable for backtests.
 POINT_IN_TIME_DIMENSIONS = {"ARQ", "ART", "ARY"}
 
+# In `fundamentals`, `date` is the day the filing became public (not a trading day).
 # Filings often land after the close, so a filing is usable from the day after
-# its datekey, never on the datekey itself.
+# that date, never on the date itself.
 AVAILABILITY_LAG = pd.Timedelta(days=1)
 
-# SF1 identifier/date columns; every other numeric column is a fundamental value.
+# `fundamentals` identifier/date columns; every other numeric column is a value.
 # `lastupdated` is when Sharadar last touched the row: a future date, never a feature.
-SF1_ID_COLUMNS = {
+FUNDAMENTALS_ID_COLUMNS = {
     "ticker",
     "dimension",
     "calendardate",
-    "datekey",
+    "date",
     "reportperiod",
     "fiscalperiod",
     "lastupdated",
@@ -186,15 +188,15 @@ SF1_ID_COLUMNS = {
 
 
 def build_fundamentals(
-    sf1: pd.DataFrame, master: pd.DataFrame, keys: pd.DataFrame, dimension: str = "ART"
+    fundamentals: pd.DataFrame, master: pd.DataFrame, keys: pd.DataFrame, dimension: str = "ART"
 ) -> pd.DataFrame:
     """Attach to each (permaticker, month_end) in `keys` the latest filing public before it.
 
-    Aligns on `datekey` (the date the filing became public), not on the fiscal
+    Aligns on `date` (the day the filing became public), not on the fiscal
     period: Q4 numbers for December are not known until February. Default ART
     (trailing twelve months, as reported) smooths seasonal quarters.
 
-    Columns: permaticker, month_end, filing_date, period_end, then the SF1 values.
+    Columns: permaticker, month_end, filing_date, period_end, then the fundamental values.
     `filing_date` lets later steps drop stale fundamentals.
     """
     if dimension not in POINT_IN_TIME_DIMENSIONS:
@@ -202,21 +204,25 @@ def build_fundamentals(
             f"Dimension {dimension!r} is not point-in-time; use one of "
             f"{sorted(POINT_IN_TIME_DIMENSIONS)}"
         )
-    rows = sf1[sf1["dimension"] == dimension]
+    rows = fundamentals[fundamentals["dimension"] == dimension]
 
-    if rows.duplicated(["ticker", "datekey"]).any():
-        raise ValueError(f"SF1 {dimension} has duplicate (ticker, datekey) rows")
-    if (rows["datekey"] < rows["reportperiod"]).any():
-        raise ValueError("SF1 has filings dated before their period ended")
+    if rows.duplicated(["ticker", "date"]).any():
+        raise ValueError(f"fundamentals {dimension} has duplicate (ticker, date) rows")
+    if (rows["date"] < rows["reportperiod"]).any():
+        raise ValueError("fundamentals has filings dated before their period ended")
 
     ids = master.set_index("ticker")["permaticker"]
     unmapped = set(rows["ticker"]) - set(ids.index)
     if unmapped:
-        raise ValueError(f"SF1 tickers missing from security master: {sorted(unmapped)[:10]}")
+        raise ValueError(
+            f"fundamentals tickers missing from security master: {sorted(unmapped)[:10]}"
+        )
 
-    values = [c for c in rows.select_dtypes("number").columns if c not in SF1_ID_COLUMNS]
-    filings = rows[["ticker", "datekey", "reportperiod", *values]].rename(
-        columns={"datekey": "filing_date", "reportperiod": "period_end"}
+    values = [c for c in rows.select_dtypes("number").columns if c not in FUNDAMENTALS_ID_COLUMNS]
+    # Rename `date` at once: here it is a filing date, and must not be mistaken
+    # for the trading `date` used everywhere else.
+    filings = rows[["ticker", "date", "reportperiod", *values]].rename(
+        columns={"date": "filing_date", "reportperiod": "period_end"}
     )
     filings = filings.assign(
         permaticker=filings["ticker"].map(ids),
@@ -242,6 +248,7 @@ def build_fundamentals(
 def load_fundamentals(
     keys: pd.DataFrame, raw_dir: Path = RAW_DIR, dimension: str = "ART"
 ) -> pd.DataFrame:
-    """Read SF1 + TICKERS from disk and build point-in-time fundamentals for `keys`."""
+    """Read `fundamentals` + `tickers` from disk and build point-in-time fundamentals."""
     master = load_security_master(raw_dir)
-    return build_fundamentals(pd.read_parquet(raw_dir / "SF1.parquet"), master, keys, dimension)
+    raw = pd.read_parquet(raw_dir / "fundamentals.parquet")
+    return build_fundamentals(raw, master, keys, dimension)

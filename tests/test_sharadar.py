@@ -25,7 +25,7 @@ def fake_fundamentals(api_table, params):
             "ticker": ["AAPL"],
             "dimension": ["ARQ"],
             "calendardate": ["2026-06-30"],
-            "date": ["2026-07-31"],  # filing date: `datekey` in the Nasdaq-era schema
+            "date": ["2026-07-31"],  # in fundamentals, `date` is the filing date
             "reportperiod": ["2026-06-27"],
             "revenue": [94_036_000_000],
         }
@@ -33,8 +33,8 @@ def fake_fundamentals(api_table, params):
 
 
 def test_download_writes_parquet_with_parsed_dates(tmp_path):
-    path = sharadar.download_table("SEP", ["AAPL"], out_dir=tmp_path, fetch=fake_stocks)
-    assert path == tmp_path / "SEP.parquet"
+    path = sharadar.download_table("stocks", ["AAPL"], out_dir=tmp_path, fetch=fake_stocks)
+    assert path == tmp_path / "stocks.parquet"
     df = pd.read_parquet(path)
     assert pd.api.types.is_datetime64_any_dtype(df["date"])
     assert df["close"].tolist() == [184.3, 185.6]
@@ -47,7 +47,7 @@ def test_one_request_per_ticker_with_full_history(tmp_path):
         calls.append((api_table, params))
         return fake_stocks(api_table, params)
 
-    path = sharadar.download_table("SEP", ["AAPL", "MSFT"], out_dir=tmp_path, fetch=spy)
+    path = sharadar.download_table("stocks", ["AAPL", "MSFT"], out_dir=tmp_path, fetch=spy)
     assert [c[0] for c in calls] == ["stocks", "stocks"]
     assert [c[1]["ticker"] for c in calls] == ["AAPL", "MSFT"]
     # Without an explicit `from`, the API would return only the last year.
@@ -55,30 +55,31 @@ def test_one_request_per_ticker_with_full_history(tmp_path):
     assert set(pd.read_parquet(path)["ticker"]) == {"AAPL", "MSFT"}
 
 
-def test_sf1_filing_date_is_renamed_to_datekey(tmp_path):
-    path = sharadar.download_table("SF1", ["AAPL"], out_dir=tmp_path, fetch=fake_fundamentals)
+def test_fundamentals_saved_with_vendor_names_and_parsed_dates(tmp_path):
+    path = sharadar.download_table("fundamentals", ["AAPL"], tmp_path, fetch=fake_fundamentals)
     df = pd.read_parquet(path)
-    assert "date" not in df.columns
-    assert df.loc[0, "datekey"] == pd.Timestamp("2026-07-31")
+    assert path == tmp_path / "fundamentals.parquet"
+    assert list(df.columns) == list(fake_fundamentals("fundamentals", {}).columns)
+    assert df.loc[0, "date"] == pd.Timestamp("2026-07-31")
     assert df.loc[0, "reportperiod"] == pd.Timestamp("2026-06-27")
 
 
-def test_dimension_filter_is_sent_for_sf1_only(tmp_path):
+def test_dimension_filter_is_sent_for_fundamentals_only(tmp_path):
     seen = {}
 
     def spy(api_table, params):
         seen.update(params)
         return fake_fundamentals(api_table, params)
 
-    sharadar.download_table("SF1", ["AAPL"], out_dir=tmp_path, fetch=spy, dimension="ARQ,ART")
+    sharadar.download_table("fundamentals", ["AAPL"], tmp_path, fetch=spy, dimension="ARQ,ART")
     assert seen["dimension"] == "ARQ,ART"
-    with pytest.raises(ValueError, match="only applies to SF1"):
-        sharadar.download_table("SEP", ["AAPL"], tmp_path, fetch=fake_stocks, dimension="ARQ")
+    with pytest.raises(ValueError, match="only applies to fundamentals"):
+        sharadar.download_table("stocks", ["AAPL"], tmp_path, fetch=fake_stocks, dimension="ARQ")
 
 
-def test_tickers_table_names_mapped_to_legacy_codes(tmp_path):
+def test_tickers_saved_verbatim_without_date_filter(tmp_path):
     def fake_tickers(api_table, params):
-        # `from` would filter TICKERS on a date it doesn't have; it must not be sent.
+        # `from` would filter `tickers` on a date it doesn't have; it must not be sent.
         assert "from" not in params
         return pd.DataFrame(
             {
@@ -89,15 +90,15 @@ def test_tickers_table_names_mapped_to_legacy_codes(tmp_path):
             }
         )
 
-    path = sharadar.download_table("TICKERS", ["AAPL"], tmp_path, fetch=fake_tickers)
-    assert pd.read_parquet(path)["table"].tolist() == ["SEP", "SF1", "SF2"]
+    path = sharadar.download_table("tickers", ["AAPL"], tmp_path, fetch=fake_tickers)
+    assert pd.read_parquet(path)["table"].tolist() == ["stocks", "fundamentals", "insiders"]
 
 
 def test_response_at_row_limit_is_treated_as_truncated(tmp_path, monkeypatch):
     monkeypatch.setattr(sharadar, "ROW_LIMIT", 2)
     with pytest.raises(ValueError, match="truncated"):
-        sharadar.download_table("SEP", ["AAPL"], out_dir=tmp_path, fetch=fake_stocks)
-    assert not (tmp_path / "SEP.parquet").exists()
+        sharadar.download_table("stocks", ["AAPL"], out_dir=tmp_path, fetch=fake_stocks)
+    assert not (tmp_path / "stocks.parquet").exists()
 
 
 def test_parse_csv_keeps_identifiers_as_text():
@@ -120,14 +121,14 @@ def test_missing_required_column_fails(tmp_path):
     def no_filing_date(api_table, params):
         return fake_fundamentals(api_table, params).drop(columns="date")
 
-    with pytest.raises(ValueError, match="datekey"):
-        sharadar.download_table("SF1", ["AAPL"], out_dir=tmp_path, fetch=no_filing_date)
-    assert not (tmp_path / "SF1.parquet").exists()
+    with pytest.raises(ValueError, match="'date'"):
+        sharadar.download_table("fundamentals", ["AAPL"], tmp_path, fetch=no_filing_date)
+    assert not (tmp_path / "fundamentals.parquet").exists()
 
 
 def test_empty_result_fails(tmp_path):
     with pytest.raises(ValueError, match="no rows"):
-        sharadar.download_table("SEP", ["AAPL"], tmp_path, fetch=lambda *a: pd.DataFrame())
+        sharadar.download_table("stocks", ["AAPL"], tmp_path, fetch=lambda *a: pd.DataFrame())
 
 
 def test_unknown_table_fails(tmp_path):
@@ -137,7 +138,7 @@ def test_unknown_table_fails(tmp_path):
 
 def test_no_tickers_fails(tmp_path):
     with pytest.raises(ValueError, match="at least one ticker"):
-        sharadar.download_table("SEP", [], out_dir=tmp_path, fetch=fake_stocks)
+        sharadar.download_table("stocks", [], out_dir=tmp_path, fetch=fake_stocks)
 
 
 def test_missing_api_key_gives_clear_error(monkeypatch):
