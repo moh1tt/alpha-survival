@@ -143,6 +143,35 @@ def test_no_return_depends_on_future_prices():
     pd.testing.assert_frame_equal(a.iloc[:2], b.iloc[:2])
 
 
+def test_unfinished_last_month_is_dropped():
+    # Pulled on Oct 16: the October row is half a month, not a monthly return.
+    monthly = real.build_monthly_returns(
+        price_rows("AAA", ["2026-08-31", "2026-09-30", "2026-10-16"], [100.0, 110.0, 99.0]),
+        master_for("AAA"),
+    )
+    out = real.drop_unfinished_months(monthly, pd.Timestamp("2026-10-16"))
+    assert list(out["month_end"]) == list(pd.to_datetime(["2026-08-31", "2026-09-30"]))
+
+
+def test_month_ending_on_weekend_counts_once_last_weekday_is_reached():
+    # Aug 31 2024 was a Saturday; data through Friday Aug 30 covers all of August.
+    monthly = real.build_monthly_returns(
+        price_rows("AAA", ["2024-07-31", "2024-08-30"], [100.0, 105.0]), master_for("AAA")
+    )
+    out = real.drop_unfinished_months(monthly, pd.Timestamp("2024-08-30"))
+    assert out["month_end"].iloc[-1] == pd.Timestamp("2024-08-31")
+
+
+def test_holiday_on_last_weekday_drops_month_conservatively():
+    # Good Friday, Mar 29 2024: market closed, so Mar 28 was really the last day.
+    # Without a trading calendar we wait for the next pull rather than guess.
+    monthly = real.build_monthly_returns(
+        price_rows("AAA", ["2024-02-29", "2024-03-28"], [100.0, 105.0]), master_for("AAA")
+    )
+    out = real.drop_unfinished_months(monthly, pd.Timestamp("2024-03-28"))
+    assert list(out["month_end"]) == [pd.Timestamp("2024-02-29")]
+
+
 def test_unmapped_ticker_raises():
     stocks = price_rows("ZZZ", ["2024-01-31"], [1.0])
     with pytest.raises(ValueError, match="missing from security master"):

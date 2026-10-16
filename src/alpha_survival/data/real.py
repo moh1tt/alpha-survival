@@ -157,11 +157,33 @@ def add_delisting_returns(
     return out.rename(columns={"action": "delist_action"}).drop(columns="penalty")
 
 
-def load_monthly_returns(raw_dir: Path = RAW_DIR) -> pd.DataFrame:
-    """Read `stocks` + `actions` and build delisting-adjusted monthly returns."""
+def drop_unfinished_months(monthly: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFrame:
+    """Drop months that had not ended by `as_of`, the last date the data covers.
+
+    Data pulled mid-October gives an October row holding only half a month of
+    return; a backtest would treat it as a full month. A month counts as ended
+    once `as_of` reaches its last weekday. Holidays are ignored, so a month whose
+    last weekday is a holiday waits for the next pull: conservative, never leaky.
+    """
+    month_ends = monthly["month_end"].drop_duplicates()
+    last_weekday = month_ends.map(pd.offsets.BMonthEnd().rollback)
+    ended = month_ends[last_weekday <= pd.Timestamp(as_of).normalize()]
+    return monthly[monthly["month_end"].isin(ended)].reset_index(drop=True)
+
+
+def load_monthly_returns(
+    raw_dir: Path = RAW_DIR, as_of: pd.Timestamp | None = None
+) -> pd.DataFrame:
+    """Read `stocks` + `actions` and build delisting-adjusted monthly returns.
+
+    `as_of` defaults to the latest price date in the file (when it was pulled).
+    """
     master = load_security_master(raw_dir)
-    monthly = build_monthly_returns(pd.read_parquet(raw_dir / "stocks.parquet"), master)
-    return add_delisting_returns(monthly, pd.read_parquet(raw_dir / "actions.parquet"), master)
+    stocks = pd.read_parquet(raw_dir / "stocks.parquet")
+    monthly = build_monthly_returns(stocks, master)
+    monthly = add_delisting_returns(monthly, pd.read_parquet(raw_dir / "actions.parquet"), master)
+    # Last, so a distress exit in the unfinished month doesn't warn as "unmatched".
+    return drop_unfinished_months(monthly, as_of if as_of is not None else stocks["date"].max())
 
 
 # `fundamentals` "dimensions": AR* = as reported (one row per original filing, dated by when it
