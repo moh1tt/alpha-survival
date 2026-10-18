@@ -107,12 +107,17 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     return monthly[["permaticker", "month_end", "ret", "last_trade_date"]].reset_index(drop=True)
 
 
-# Sharadar `actions` types where shareholders likely lost money on exit. Names verified
-# against the Nasdaq-era action-type list (re-check on the direct API once we have
-# delisted names); for all four, `date` is the last trade date. Acquisitions/mergers
-# are not here: the last price already reflects the deal, so their delisting
-# return is ~0 and we leave them alone.
-DISTRESS_EXITS = {"bankruptcyliquidation", "regulatorydelisting", "voluntarydelisting", "delisted"}
+# Sharadar `actions` types that name a distress exit: always penalised. For these
+# and `delisted`, `date` is the last trade date (checked on the full history).
+DISTRESS_EXITS = {"bankruptcyliquidation", "regulatorydelisting", "voluntarydelisting"}
+# Fires for EVERY delisting, takeovers included (7,379 of 18,303 stocks with it were
+# acquired), so on its own it says nothing about why the stock left.
+GENERIC_EXIT = "delisted"
+# Target side of a takeover: the last price already reflects the deal, so no penalty.
+# On the full history these delist within a week 100% of the time, and every other
+# acquisition* action co-occurs with one of them. `acquisitionof` / `mergerfrom` are
+# the acquirer's side (it keeps trading) and must not exempt a stock.
+TAKEOVER_ACTIONS = {"acquisitionby", "mergerto"}
 
 # Average return after a performance delisting, which the last price misses.
 # NYSE/AMEX: Shumway (1997); Nasdaq: Shumway & Warther (1999).
@@ -121,7 +126,10 @@ DEFAULT_DELISTING_PENALTY = -0.30  # the few BATS/OTC/NYSEARCA names
 
 
 def add_delisting_returns(
-    monthly: pd.DataFrame, actions: pd.DataFrame, master: pd.DataFrame
+    monthly: pd.DataFrame,
+    actions: pd.DataFrame,
+    master: pd.DataFrame,
+    penalise_unexplained: bool = True,
 ) -> pd.DataFrame:
     """Compound a delisting penalty into the exit month of stocks that died in distress.
 
@@ -129,9 +137,18 @@ def add_delisting_returns(
     its last trade; the further loss to shareholders vanishes and distressed
     stocks look better than they were (Shumway 1997).
 
+    Explicit distress exits are always penalised, takeover targets never. A bare
+    `delisted` with no takeover is ambiguous (failure, or an uncoded buyout):
+    penalised by default, which is closest to Shumway's performance-delisting
+    rule; `penalise_unexplained=False` gives the other bound for robustness checks.
+
     Adds `delist_action` (the exit type, or NA) so later reports can count them.
     """
-    exits = actions.loc[actions["action"].isin(DISTRESS_EXITS), ["ticker", "date", "action"]]
+    penalised = actions["action"].isin(DISTRESS_EXITS)
+    if penalise_unexplained:
+        taken_over = actions.loc[actions["action"].isin(TAKEOVER_ACTIONS), "ticker"]
+        penalised |= (actions["action"] == GENERIC_EXIT) & ~actions["ticker"].isin(taken_over)
+    exits = actions.loc[penalised, ["ticker", "date", "action"]]
     exits = exits.merge(master[["ticker", "permaticker", "exchange"]], on="ticker")
     # A stock can get several exit rows (e.g. regulatory delisting, then bankruptcy):
     # penalise it once, using the latest.
@@ -172,7 +189,7 @@ def drop_unfinished_months(monthly: pd.DataFrame, as_of: pd.Timestamp) -> pd.Dat
 
 
 def load_monthly_returns(
-    raw_dir: Path = RAW_DIR, as_of: pd.Timestamp | None = None
+    raw_dir: Path = RAW_DIR, as_of: pd.Timestamp | None = None, penalise_unexplained: bool = True
 ) -> pd.DataFrame:
     """Read `stocks` + `actions` and build delisting-adjusted monthly returns.
 
@@ -181,7 +198,8 @@ def load_monthly_returns(
     master = load_security_master(raw_dir)
     stocks = pd.read_parquet(raw_dir / "stocks.parquet")
     monthly = build_monthly_returns(stocks, master)
-    monthly = add_delisting_returns(monthly, pd.read_parquet(raw_dir / "actions.parquet"), master)
+    actions = pd.read_parquet(raw_dir / "actions.parquet")
+    monthly = add_delisting_returns(monthly, actions, master, penalise_unexplained)
     # Last, so a distress exit in the unfinished month doesn't warn as "unmatched".
     return drop_unfinished_months(monthly, as_of if as_of is not None else stocks["date"].max())
 
@@ -302,8 +320,11 @@ def build_panel(monthly: pd.DataFrame, fundamentals: pd.DataFrame) -> pd.DataFra
 
 
 def load_panel(
-    raw_dir: Path = RAW_DIR, as_of: pd.Timestamp | None = None, dimension: str = "ART"
+    raw_dir: Path = RAW_DIR,
+    as_of: pd.Timestamp | None = None,
+    dimension: str = "ART",
+    penalise_unexplained: bool = True,
 ) -> pd.DataFrame:
     """Read everything from disk and build the monthly modelling panel."""
-    monthly = load_monthly_returns(raw_dir, as_of)
+    monthly = load_monthly_returns(raw_dir, as_of, penalise_unexplained)
     return build_panel(monthly, load_fundamentals(monthly, raw_dir, dimension))

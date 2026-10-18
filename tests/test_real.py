@@ -264,6 +264,45 @@ def test_actions_for_securities_outside_master_are_ignored():
     assert out["ret"].iloc[0] == pytest.approx(0.10)
 
 
+def test_takeover_target_with_generic_delisted_is_not_penalised():
+    # Found on the full history: `delisted` fires for takeovers too (7,379 stocks).
+    monthly = monthly_rows(1, ["2024-02-29"], [0.20])
+    actions = action_rows(
+        "AAA", ["2024-02-12"] * 3, ["delisted", "acquisitionby", "acquisitioncash"]
+    )
+    out = real.add_delisting_returns(monthly, actions, master_with_exchange(AAA="NYSE"))
+    assert out["ret"].iloc[0] == pytest.approx(0.20)
+    assert pd.isna(out["delist_action"].iloc[0])
+
+
+def test_acquirer_side_does_not_exempt_a_later_unexplained_delisting():
+    # AAA bought someone in 2020 (`acquisitionof`), then quietly delisted in 2024.
+    monthly = monthly_rows(1, ["2024-02-29"], [0.0])
+    actions = action_rows("AAA", ["2020-05-01", "2024-02-12"], ["acquisitionof", "delisted"])
+    out = real.add_delisting_returns(monthly, actions, master_with_exchange(AAA="NYSE"))
+    assert out["ret"].iloc[0] == pytest.approx(-0.30)
+
+
+def test_unexplained_delisting_penalised_only_when_asked():
+    monthly = monthly_rows(1, ["2024-02-29"], [0.0])
+    actions = action_rows("AAA", ["2024-02-12"], ["delisted"])
+    master = master_with_exchange(AAA="NYSE")
+    on = real.add_delisting_returns(monthly, actions, master)
+    off = real.add_delisting_returns(monthly, actions, master, penalise_unexplained=False)
+    assert on["ret"].iloc[0] == pytest.approx(-0.30)
+    assert off["ret"].iloc[0] == pytest.approx(0.0)
+    assert pd.isna(off["delist_action"].iloc[0])
+
+
+def test_explicit_distress_is_penalised_in_both_modes_even_after_a_takeover_bid():
+    monthly = monthly_rows(1, ["2024-02-29"], [0.0])
+    actions = action_rows("AAA", ["2024-02-12"] * 2, ["bankruptcyliquidation", "acquisitionby"])
+    master = master_with_exchange(AAA="NYSE")
+    for flag in (True, False):
+        out = real.add_delisting_returns(monthly, actions, master, penalise_unexplained=flag)
+        assert out["ret"].iloc[0] == pytest.approx(-0.30)
+
+
 # --- point-in-time fundamentals ----------------------------------------------
 
 
