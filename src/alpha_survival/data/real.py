@@ -249,6 +249,12 @@ POINT_IN_TIME_DIMENSIONS = {"ARQ", "ART", "ARY"}
 # that date, never on the date itself.
 AVAILABILITY_LAG = pd.Timedelta(days=1)
 
+# A filing older than this at month end is no longer used: the company stopped
+# reporting (or the data has a gap), and years-old earnings would pose as current.
+# Normally a new 10-Q/10-K lands every quarter, so the latest one is at most ~135
+# days old; a year leaves ample room for late filers.
+MAX_FILING_AGE = pd.Timedelta(days=365)
+
 # `fundamentals` identifier/date columns; every other numeric column is a value.
 # `lastupdated` is when Sharadar last touched the row: a future date, never a feature.
 FUNDAMENTALS_ID_COLUMNS = {
@@ -272,7 +278,8 @@ def build_fundamentals(
     (trailing twelve months, as reported) smooths seasonal quarters.
 
     Columns: permaticker, month_end, filing_date, period_end, then the fundamental values.
-    `filing_date` lets later steps drop stale fundamentals.
+    A month whose latest filing is older than `MAX_FILING_AGE` gets all-NaN
+    fundamentals (filing_date included), as if the stock had never filed.
     """
     if dimension not in POINT_IN_TIME_DIMENSIONS:
         raise ValueError(
@@ -313,7 +320,9 @@ def build_fundamentals(
     ).drop(columns="ticker")
 
     left = keys[["permaticker", "month_end"]].astype({"month_end": "datetime64[ns]"})
-    # "Latest filing with available_date <= month_end", per stock.
+    # "Latest filing with available_date <= month_end", per stock, and no match at
+    # all if that one is too old. Tolerance counts from available_date, one lag
+    # after filing_date, so subtract the lag to cap the age of filing_date itself.
     out = pd.merge_asof(
         left.sort_values("month_end"),
         filings.sort_values("available_date"),
@@ -321,6 +330,7 @@ def build_fundamentals(
         right_on="available_date",
         by="permaticker",
         direction="backward",
+        tolerance=MAX_FILING_AGE - AVAILABILITY_LAG,
     ).drop(columns="available_date")
 
     cols = ["permaticker", "month_end", "filing_date", "period_end", *values]

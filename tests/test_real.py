@@ -389,6 +389,24 @@ def test_no_month_uses_a_filing_from_its_future():
     assert (out["filing_date"] < out["month_end"]).all()
 
 
+def test_filing_expires_after_max_age():
+    # Filed 2023-01-31: exactly 365 days old on 2024-01-31 (still used), 394 on 2024-02-29.
+    filings = filing_rows("AAA", ["2023-01-31"], ["2022-12-31"], [500.0])
+    out = real.build_fundamentals(filings, master_for("AAA"), keys_for(1, MONTHS))
+    assert out["revenue"].iloc[0] == 500.0
+    assert out[["revenue", "filing_date", "period_end"]].iloc[1:].isna().all().all()
+
+
+def test_new_filing_revives_fundamentals_after_expiry():
+    # Stopped reporting for over a year, then filed again: used from the new filing on.
+    filings = filing_rows(
+        "AAA", ["2022-11-15", "2024-02-20"], ["2022-09-30", "2023-12-31"], [500.0, 450.0]
+    )
+    out = real.build_fundamentals(filings, master_for("AAA"), keys_for(1, MONTHS))
+    assert pd.isna(out["revenue"].iloc[0])
+    assert list(out["revenue"].iloc[1:]) == [450.0, 450.0]
+
+
 def test_stocks_do_not_bleed_into_each_other_fundamentals():
     filings = pd.concat(
         [
