@@ -10,8 +10,8 @@ Older papers, forums and Nasdaq Data Link use legacy codes for the same tables:
   stocks = SEP, fundamentals = SF1, tickers = TICKERS, actions = ACTIONS.
 In `fundamentals`, `date` is the filing date (legacy `datekey`), not a trading day.
 
-This module handles per-ticker (sample) pulls. Full-history tables are too large
-for row queries and will use the bulk-download endpoint later.
+Two modes: per-ticker row queries (samples, tests) and bulk files (full tables,
+too large for row queries: the stocks zip alone is ~1 GB).
 """
 
 from __future__ import annotations
@@ -19,10 +19,13 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
+import duckdb
 import pandas as pd
+import pyarrow.parquet as pq
 import requests
 from dotenv import load_dotenv
 
@@ -163,13 +166,108 @@ def download_table(
     return path
 
 
+REDIRECT_CODES = {301, 302, 303, 307, 308}
+
+
+def fetch_bulk_zip(table: str, dest: Path, history: str = "full", api_key: str | None = None):
+    """Download one table's bulk zip (`history`: 5, 10 or full years) to `dest`."""
+    resp = requests.get(
+        f"{BASE_URL}/{table}",
+        params={"years": history},
+        headers={"x-api-key": api_key or load_api_key()},
+        allow_redirects=False,
+        timeout=60,
+    )
+    if resp.status_code in (401, 403):
+        raise PermissionError(
+            f"Sharadar refused bulk {table}: {resp.status_code} {resp.text[:200]}"
+        )
+    if resp.status_code not in REDIRECT_CODES:
+        resp.raise_for_status()
+        raise ValueError(f"Expected a redirect to the {table} bulk file, got {resp.status_code}")
+
+    # The redirect is a pre-signed link on a storage host: fetch it without our
+    # key, which has no business reaching a third party.
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with requests.get(resp.headers["Location"], stream=True, timeout=60) as file_resp:
+        file_resp.raise_for_status()
+        expected = int(file_resp.headers.get("Content-Length", -1))
+        with open(dest, "wb") as f:
+            for chunk in file_resp.iter_content(chunk_size=8 << 20):
+                f.write(chunk)
+
+    if expected >= 0 and dest.stat().st_size != expected:
+        dest.unlink()
+        raise OSError(f"{table} bulk download cut off: {dest.stat().st_size} of {expected} bytes")
+    return dest
+
+
+def convert_bulk_csv(zip_path: Path, table: str, out_dir: Path = RAW_DIR) -> Path:
+    """Convert a bulk zip to `<out_dir>/<table>.parquet`, with the same typing as row queries.
+
+    DuckDB streams the CSV from disk, so a multi-GB file never has to fit in
+    pandas. The Parquet is written to a temp name and renamed only once complete.
+    """
+    if table not in REQUIRED_COLUMNS:
+        raise ValueError(f"Unknown table {table!r}; expected one of {sorted(REQUIRED_COLUMNS)}")
+
+    with zipfile.ZipFile(zip_path) as zf:
+        members = [m for m in zf.namelist() if m.endswith(".csv")]
+        if len(members) != 1:
+            raise ValueError(f"{zip_path.name}: expected one CSV, found {members}")
+        with zf.open(members[0]) as f:
+            header = f.readline().decode("utf-8-sig").strip().replace('"', "").split(",")
+        missing = REQUIRED_COLUMNS[table] - set(header)
+        if missing:
+            raise ValueError(f"Sharadar {table} is missing columns: {sorted(missing)}")
+        csv_path = Path(zf.extract(members[0], zip_path.parent))
+
+    # Same rules as parse_csv: identifiers stay text, only blanks are missing,
+    # and the whole file is scanned before guessing a numeric column's type.
+    types = {c: "VARCHAR" for c in TEXT_COLUMNS & set(header)}
+    types |= {c: "TIMESTAMP" for c in DATE_COLUMNS & set(header)}
+    path = out_dir / f"{table}.parquet"
+    tmp = path.with_suffix(".parquet.tmp")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        con = duckdb.connect()
+        con.execute(
+            f"COPY (SELECT * FROM read_csv('{csv_path.as_posix()}', header = true, "
+            f"sample_size = -1, nullstr = '', types = {types})) "
+            f"TO '{tmp.as_posix()}' (FORMAT parquet)"
+        )
+        con.close()
+    finally:
+        csv_path.unlink()
+
+    if pq.ParquetFile(tmp).metadata.num_rows == 0:
+        tmp.unlink()
+        raise ValueError(f"Sharadar {table} bulk file has no rows.")
+    tmp.replace(path)
+    return path
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Download Sharadar tables to Parquet.")
     parser.add_argument("--tables", nargs="+", default=sorted(REQUIRED_COLUMNS))
-    parser.add_argument("--tickers", nargs="+", required=True, help="Tickers to download.")
+    parser.add_argument("--tickers", nargs="+", help="Tickers to download (row queries).")
+    parser.add_argument("--bulk", action="store_true", help="Download full tables as bulk files.")
+    parser.add_argument("--history", default="full", choices=["5", "10", "full"])
     parser.add_argument("--dimension", help="fundamentals dimensions, e.g. ARQ,ART (default: all).")
     parser.add_argument("--out-dir", type=Path, default=RAW_DIR)
     args = parser.parse_args(argv)
+    if args.bulk == bool(args.tickers):
+        parser.error("pass either --tickers or --bulk")
+    if args.bulk and args.dimension:
+        parser.error("--dimension applies to row queries only; bulk files hold every dimension")
+
+    if args.bulk:
+        for table in args.tables:
+            zip_path = fetch_bulk_zip(table, args.out_dir / f"{table}.csv.zip", args.history)
+            path = convert_bulk_csv(zip_path, table, args.out_dir)
+            zip_path.unlink()
+            print(f"{table}: {pq.ParquetFile(path).metadata.num_rows:,} rows -> {path}")
+        return
 
     fetch = api_fetcher()
     for table in args.tables:

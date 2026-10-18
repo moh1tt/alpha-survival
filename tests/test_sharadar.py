@@ -1,5 +1,7 @@
 """Tests for the Sharadar downloader. No network: a fake fetcher stands in for the API."""
 
+import zipfile
+
 import pandas as pd
 import pytest
 
@@ -148,3 +150,58 @@ def test_missing_api_key_gives_clear_error(monkeypatch):
     monkeypatch.delenv(sharadar.API_KEY_VAR, raising=False)
     with pytest.raises(RuntimeError, match=sharadar.API_KEY_VAR):
         sharadar.load_api_key()
+
+
+# --- bulk files ----------------------------------------------------------------
+
+
+def bulk_zip(tmp_path, csv_text, name="SHARADAR_SEP.csv"):
+    path = tmp_path / "stocks.csv.zip"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(name, csv_text)
+    return path
+
+
+BULK_STOCKS = (
+    "ticker,date,close,closeadj,volume,cusips\n"
+    "NA,2024-01-03,184.3,183.6,58414500,037833100\n"
+    "V,2024-01-02,185.6,,82488700,92826C839\n"
+)
+
+
+def test_bulk_matches_row_query_typing(tmp_path):
+    path = sharadar.convert_bulk_csv(bulk_zip(tmp_path, BULK_STOCKS), "stocks", tmp_path / "raw")
+    df = pd.read_parquet(path)
+    assert df["ticker"].tolist() == ["NA", "V"]  # "NA" is a ticker, not missing
+    assert df["cusips"].tolist() == ["037833100", "92826C839"]  # leading zero kept
+    assert pd.api.types.is_datetime64_any_dtype(df["date"])
+    assert df["closeadj"].isna().tolist() == [False, True]  # blanks are missing
+    assert df["volume"].dtype.kind in "iu"
+
+
+def test_bulk_removes_extracted_csv_and_temp_file(tmp_path):
+    out = tmp_path / "raw"
+    sharadar.convert_bulk_csv(bulk_zip(tmp_path, BULK_STOCKS), "stocks", out)
+    assert sorted(p.name for p in out.iterdir()) == ["stocks.parquet"]
+    assert not (tmp_path / "SHARADAR_SEP.csv").exists()
+
+
+def test_bulk_missing_required_column_fails_before_converting(tmp_path):
+    zip_path = bulk_zip(tmp_path, "ticker,date,close\nAAPL,2024-01-03,184.3\n")
+    with pytest.raises(ValueError, match="missing columns"):
+        sharadar.convert_bulk_csv(zip_path, "stocks", tmp_path / "raw")
+    assert not (tmp_path / "raw" / "stocks.parquet").exists()
+
+
+def test_bulk_empty_file_fails_and_keeps_no_parquet(tmp_path):
+    zip_path = bulk_zip(tmp_path, "ticker,date,close,closeadj,volume\n")
+    with pytest.raises(ValueError, match="no rows"):
+        sharadar.convert_bulk_csv(zip_path, "stocks", tmp_path / "raw")
+    assert not any((tmp_path / "raw").iterdir())
+
+
+def test_cli_needs_exactly_one_mode():
+    with pytest.raises(SystemExit):
+        sharadar.main([])
+    with pytest.raises(SystemExit):
+        sharadar.main(["--bulk", "--tickers", "AAPL"])
