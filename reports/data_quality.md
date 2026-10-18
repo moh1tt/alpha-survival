@@ -4,6 +4,7 @@
 - Stale prices (last trade > 7 days before month end): 8,509
 - Stale filings (latest filing > 180 days old): 9,643
 - Extreme returns (below -50% or above 100%): 25,025
+- Investable rows (price >= $5 at month end): 1,362,457 (74%); of these, extreme next-month returns: 6,599
 
 ## Coverage by year
 
@@ -75,8 +76,8 @@ Stocks per month (min / median / max) and mean share of rows with each field.
 | eps | 0.13 |
 | epsusd | 0.13 |
 | ncfx | 0.13 |
-| ebitda | 0.13 |
 | ebitdausd | 0.13 |
+| ebitda | 0.13 |
 | ncfdiv | 0.12 |
 | ncfbus | 0.12 |
 | sbcomp | 0.12 |
@@ -94,21 +95,21 @@ Stocks per month (min / median / max) and mean share of rows with each field.
 | evebit | 0.12 |
 | pe | 0.12 |
 | netincnci | 0.12 |
-| consolinc | 0.12 |
-| prefdivis | 0.12 |
-| netinccmnusd | 0.12 |
 | ebitusd | 0.12 |
-| ebt | 0.12 |
 | ebit | 0.12 |
-| netinccmn | 0.12 |
+| ebt | 0.12 |
+| prefdivis | 0.12 |
 | netinc | 0.12 |
+| netinccmnusd | 0.12 |
+| netinccmn | 0.12 |
+| consolinc | 0.12 |
 | netincdis | 0.12 |
 | sps | 0.12 |
 | rnd | 0.12 |
 | taxexp | 0.12 |
 | intexp | 0.12 |
-| gp | 0.12 |
 | opinc | 0.12 |
+| gp | 0.12 |
 | cor | 0.12 |
 | sgna | 0.12 |
 | opex | 0.12 |
@@ -129,8 +130,8 @@ Stocks per month (min / median / max) and mean share of rows with each field.
 | dps | 0.06 |
 | de | 0.06 |
 | assets | 0.06 |
-| invcap | 0.06 |
 | tangibles | 0.06 |
+| invcap | 0.06 |
 | liabilities | 0.06 |
 | sharesbas | 0.06 |
 | investments | 0.06 |
@@ -141,18 +142,18 @@ Stocks per month (min / median / max) and mean share of rows with each field.
 | equityusd | 0.05 |
 | equity | 0.05 |
 | ppnenet | 0.05 |
-| deferredrev | 0.05 |
 | deposits | 0.05 |
-| cashneq | 0.05 |
+| deferredrev | 0.05 |
 | cashnequsd | 0.05 |
+| cashneq | 0.05 |
 | accoci | 0.05 |
 | taxliabilities | 0.05 |
-| debt | 0.05 |
 | debtusd | 0.05 |
+| debt | 0.05 |
 | payables | 0.05 |
-| period_end | 0.05 |
 | filing_date | 0.05 |
 | fxusd | 0.05 |
+| period_end | 0.05 |
 | sharefactor | 0.05 |
 | fwd_ret | 0.01 |
 | ret | 0.01 |

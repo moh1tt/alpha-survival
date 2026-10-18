@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from alpha_survival.data.real import load_panel
+from alpha_survival.data.real import MIN_PRICE, load_panel
 
 # A month-end price older than this (calendar days) is stale: halt, illiquidity or gap.
 # 7 covers weekends plus a holiday.
@@ -121,6 +121,9 @@ def render_report(panel: pd.DataFrame) -> str:
     missing = missing_by_column(panel)
     prices, filings, extremes = stale_prices(panel), stale_filings(panel), extreme_returns(panel)
     low, high = EXTREME_RETURN
+    # What a portfolio would earn: next month's return, on stocks it may buy now.
+    buyable = panel[panel["investable"]]
+    buyable_extremes = (buyable["fwd_ret"] < low) | (buyable["fwd_ret"] > high)
 
     lines = [
         "# Data-quality report",
@@ -130,6 +133,9 @@ def render_report(panel: pd.DataFrame) -> str:
         f"- Stale prices (last trade > {STALE_PRICE_DAYS} days before month end): {len(prices):,}",
         f"- Stale filings (latest filing > {STALE_FILING_DAYS} days old): {len(filings):,}",
         f"- Extreme returns (below {low:.0%} or above {high:.0%}): {len(extremes):,}",
+        f"- Investable rows (price >= ${MIN_PRICE:g} at month end): {len(buyable):,} "
+        f"({len(buyable) / len(panel):.0%}); of these, extreme next-month returns: "
+        f"{buyable_extremes.sum():,}",
         "",
         "## Coverage by year",
         "",

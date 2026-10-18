@@ -18,6 +18,7 @@ def panel_rows(**overrides):
             "fwd_ret": [0.02, None, 0.03, None],
             "filing_date": pd.to_datetime(["2024-01-10"] * 4),
             "revenue": [500.0, 500.0, 70.0, 70.0],
+            "investable": [True, True, True, True],
         }
     )
     for col, values in overrides.items():
@@ -115,3 +116,11 @@ def test_worst_shows_each_stock_once():
     top = quality.worst(extremes, extremes["ret"], n=5)
     assert list(top["permaticker"]) == [1, 2]
     assert list(top["ret"]) == [3.0, 1.5]  # stock 1's worst month only
+
+
+def test_report_counts_extremes_only_among_investable_stocks():
+    # Stock 2 jumps +500% next month but is a penny stock in January: not counted.
+    panel = panel_rows(fwd_ret=[2.0, None, 5.0, None], investable=[True, True, False, True])
+    report = quality.render_report(panel)
+    assert "Investable rows (price >= $5 at month end): 3 (75%)" in report
+    assert "extreme next-month returns: 1" in report

@@ -95,8 +95,11 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     rewrites its past levels every time a dividend is paid, so a historical
     level is not what anyone could have seen on that date (look-ahead).
 
-    Columns: permaticker, month_end, ret, last_trade_date.
+    Columns: permaticker, month_end, ret, last_trade_date, close_unadj.
     `last_trade_date` lets later steps spot stale prices (no trade near month end).
+    `close_unadj` is the last close as actually traded (no split adjustment), the
+    price an investor saw at month end; `close` is split-adjusted backwards, so a
+    later reverse split would inflate it (look-ahead).
     """
     if stocks.duplicated(["ticker", "date"]).any():
         raise ValueError("stocks has duplicate (ticker, date) rows")
@@ -108,7 +111,7 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     if unmapped:
         raise ValueError(f"stocks tickers missing from security master: {sorted(unmapped)[:10]}")
 
-    daily = stocks[["ticker", "date", "closeadj"]].assign(
+    daily = stocks[["ticker", "date", "closeadj", "closeunadj"]].assign(
         permaticker=lambda d: d["ticker"].map(ids),
         month=lambda d: d["date"].dt.to_period("M"),
     )
@@ -118,7 +121,7 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     monthly = (
         daily.groupby(["permaticker", "month"], as_index=False)
         .last()
-        .rename(columns={"date": "last_trade_date"})
+        .rename(columns={"date": "last_trade_date", "closeunadj": "close_unadj"})
     )
 
     by_stock = monthly.groupby("permaticker")
@@ -132,7 +135,8 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     monthly.loc[gap, "ret"] = float("nan")
 
     monthly["month_end"] = monthly["month"].dt.to_timestamp(how="end").dt.normalize()
-    return monthly[["permaticker", "month_end", "ret", "last_trade_date"]].reset_index(drop=True)
+    cols = ["permaticker", "month_end", "ret", "last_trade_date", "close_unadj"]
+    return monthly[cols].reset_index(drop=True)
 
 
 # Sharadar `actions` types that name a distress exit: always penalised. For these
@@ -229,7 +233,7 @@ def load_monthly_returns(
     # Read only what returns need: the full table is ~45M rows.
     stocks = pd.read_parquet(
         raw_dir / "stocks.parquet",
-        columns=["ticker", "date", "closeadj"],
+        columns=["ticker", "date", "closeadj", "closeunadj"],
         filters=[("ticker", "in", list(universe["ticker"]))],
     )
     monthly = build_monthly_returns(stocks, master)
@@ -379,12 +383,31 @@ def build_panel(monthly: pd.DataFrame, fundamentals: pd.DataFrame) -> pd.DataFra
     return panel.merge(fundamentals, on=keys, how="left", validate="one_to_one")
 
 
+# Stocks below this price at month end are not bought that month: their quoted
+# returns are dominated by tick size and bid-ask bounce, and costs eat any edge.
+# $5 is the usual cut in the literature (e.g. Jegadeesh & Titman 2001).
+MIN_PRICE = 5.0
+
+
+def flag_investable(panel: pd.DataFrame, min_price: float = MIN_PRICE) -> pd.DataFrame:
+    """Add `investable`: True if the stock traded at >= `min_price` at month end.
+
+    A flag, not a filter. A row with investable=False may not be bought at its
+    month_end, but stays in the panel: its return is history that later features
+    (e.g. momentum) need, and a held stock that drops below the cut still costs
+    its holder. Uses only the price at month_end itself, so it adds no look-ahead.
+    """
+    return panel.assign(investable=panel["close_unadj"] >= min_price)
+
+
 def load_panel(
     raw_dir: Path = RAW_DIR,
     as_of: pd.Timestamp | None = None,
     dimension: str = "ART",
     penalise_unexplained: bool = True,
+    min_price: float = MIN_PRICE,
 ) -> pd.DataFrame:
     """Read everything from disk and build the monthly modelling panel."""
     monthly = load_monthly_returns(raw_dir, as_of, penalise_unexplained)
-    return build_panel(monthly, load_fundamentals(monthly, raw_dir, dimension))
+    panel = build_panel(monthly, load_fundamentals(monthly, raw_dir, dimension))
+    return flag_investable(panel, min_price)

@@ -93,13 +93,14 @@ def master_for(*tickers):
     return pd.DataFrame({"ticker": list(tickers), "permaticker": range(1, len(tickers) + 1)})
 
 
-def price_rows(ticker, dates, closeadj, close=None):
+def price_rows(ticker, dates, closeadj, close=None, closeunadj=None):
     return pd.DataFrame(
         {
             "ticker": ticker,
             "date": pd.to_datetime(dates),
             "closeadj": closeadj,
             "close": close if close is not None else closeadj,
+            "closeunadj": closeunadj if closeunadj is not None else closeadj,
         }
     )
 
@@ -139,6 +140,16 @@ def test_last_trade_date_flags_mid_month_stop():
     out = real.build_monthly_returns(stocks, master_for("AAA"))
     assert out["last_trade_date"].iloc[1] == pd.Timestamp("2024-02-12")
     assert out["month_end"].iloc[1] == pd.Timestamp("2024-02-29")
+
+
+def test_close_unadj_is_the_traded_price_not_the_adjusted_one():
+    # 1:10 reverse split in March: adjusted history shows $5, the market showed $0.50.
+    stocks = price_rows(
+        "AAA", ["2024-02-29", "2024-03-28"], [5.0, 5.5], close=[5.0, 5.5], closeunadj=[0.5, 5.5]
+    )
+    out = real.build_monthly_returns(stocks, master_for("AAA"))
+    assert list(out["close_unadj"]) == [0.5, 5.5]
+    assert out["ret"].iloc[1] == pytest.approx(5.5 / 5.0 - 1)  # returns still from closeadj
 
 
 def test_skipped_month_gives_nan_not_a_multi_month_return():
@@ -511,6 +522,22 @@ def test_duplicate_monthly_rows_raise():
     monthly = monthly_rows(1, ["2024-01-31", "2024-01-31"], [0.01, 0.02])
     with pytest.raises(ValueError, match="duplicate"):
         real.build_panel(monthly, keys_for(1, ["2024-01-31"]))
+
+
+def test_investable_uses_this_months_traded_price():
+    panel = pd.DataFrame({"close_unadj": [4.99, 5.0, 120.0, float("nan")]})
+    out = real.flag_investable(panel)
+    assert list(out["investable"]) == [False, True, True, False]  # no price: can't buy
+
+
+def test_investable_ignores_future_prices():
+    # Leakage test: a stock cheap in January is not investable in January even if it
+    # later trades above the cut (and vice versa).
+    dates = ["2024-01-31", "2024-02-29", "2024-03-28"]
+    stocks = price_rows("AAA", dates, [4.0, 50.0, 3.0])
+    monthly = real.build_monthly_returns(stocks, master_for("AAA"))
+    out = real.flag_investable(monthly)
+    assert list(out["investable"]) == [False, True, False]
 
 
 def test_only_the_target_sees_the_next_month():
