@@ -34,6 +34,14 @@ def test_one_row_per_stock_from_stocks_rows_only():
     assert master["permaticker"].is_unique
 
 
+def test_bulk_file_legacy_table_codes_work_too():
+    # The bulk `tickers` file labels the price table "SEP", row queries "stocks".
+    raw = raw_tickers(table=["SEP", "SF1", "SEP", "SF1"])
+    pd.testing.assert_frame_equal(
+        real.build_security_master(raw), real.build_security_master(raw_tickers())
+    )
+
+
 def test_delisted_stocks_are_kept_as_booleans():
     master = real.build_security_master(raw_tickers()).set_index("permaticker")
     assert master.loc[202, "is_delisted"]

@@ -25,6 +25,10 @@ SECURITY_MASTER_COLUMNS = {
     "lastpricedate": "last_price_date",
 }
 
+# How `tickers.table` names the stock-price table: row queries say "stocks", the
+# bulk file still uses the legacy code "SEP".
+PRICE_TABLE_CODES = {"stocks", "SEP"}
+
 
 def build_security_master(tickers: pd.DataFrame) -> pd.DataFrame:
     """Turn the raw `tickers` table into one row per stock, keyed on `permaticker`.
@@ -35,7 +39,7 @@ def build_security_master(tickers: pd.DataFrame) -> pd.DataFrame:
     """
     # `tickers` repeats each stock once per Sharadar table (stocks, fundamentals,
     # insiders...). The `stocks` row describes the price history we trade on.
-    priced = tickers.loc[tickers["table"] == "stocks", list(SECURITY_MASTER_COLUMNS)]
+    priced = tickers.loc[tickers["table"].isin(PRICE_TABLE_CODES), list(SECURITY_MASTER_COLUMNS)]
     master = priced.rename(columns=SECURITY_MASTER_COLUMNS)
 
     dupes = master["permaticker"].duplicated(keep=False)
