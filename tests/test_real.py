@@ -379,3 +379,65 @@ def test_unmapped_fundamentals_ticker_raises():
     filings = filing_rows("ZZZ", ["2024-01-10"], ["2023-12-31"], [500.0])
     with pytest.raises(ValueError, match="missing from security master"):
         real.build_fundamentals(filings, master_for("AAA"), keys_for(1, MONTHS))
+
+
+# --- modelling panel ---------------------------------------------------------
+
+
+def test_fwd_ret_is_next_months_return():
+    monthly = monthly_rows(1, MONTHS, [0.01, 0.02, 0.03])
+    out = real.build_panel(monthly, keys_for(1, MONTHS))
+    assert out["fwd_ret"].iloc[0] == pytest.approx(0.02)
+    assert out["fwd_ret"].iloc[1] == pytest.approx(0.03)
+    assert pd.isna(out["fwd_ret"].iloc[2])  # last month: future not known yet
+
+
+def test_skipped_month_gives_nan_target():
+    monthly = monthly_rows(1, ["2024-01-31", "2024-03-31"], [0.01, 0.03])
+    out = real.build_panel(monthly, keys_for(1, ["2024-01-31", "2024-03-31"]))
+    assert out["fwd_ret"].isna().all()
+
+
+def test_targets_do_not_bleed_across_stocks():
+    monthly = pd.concat(
+        [monthly_rows(1, MONTHS, [0.01, 0.02, 0.03]), monthly_rows(2, MONTHS, [0.10, 0.20, 0.30])]
+    )
+    keys = pd.concat([keys_for(1, MONTHS), keys_for(2, MONTHS)])
+    out = real.build_panel(monthly.iloc[::-1], keys).set_index(["permaticker", "month_end"])
+    assert pd.isna(out.loc[(1, pd.Timestamp("2024-03-31")), "fwd_ret"])
+    assert out.loc[(2, pd.Timestamp("2024-01-31")), "fwd_ret"] == pytest.approx(0.20)
+
+
+def test_panel_keeps_every_return_row_and_joins_fundamentals():
+    filings = filing_rows("AAA", ["2024-02-14"], ["2023-12-31"], [500.0])
+    fundamentals = real.build_fundamentals(filings, master_for("AAA"), keys_for(1, MONTHS))
+    out = real.build_panel(monthly_rows(1, MONTHS, [0.01, 0.02, 0.03]), fundamentals)
+    assert len(out) == 3
+    assert pd.isna(out["revenue"].iloc[0])  # row kept even before the first filing
+    assert list(out["revenue"].iloc[1:]) == [500.0, 500.0]
+
+
+def test_duplicate_monthly_rows_raise():
+    monthly = monthly_rows(1, ["2024-01-31", "2024-01-31"], [0.01, 0.02])
+    with pytest.raises(ValueError, match="duplicate"):
+        real.build_panel(monthly, keys_for(1, ["2024-01-31"]))
+
+
+def test_only_the_target_sees_the_next_month():
+    # Leakage test, end to end: shocking April prices and adding an April filing may
+    # change March's target, but no March feature, and nothing at all before March.
+    dates = ["2024-01-31", "2024-02-29", "2024-03-28", "2024-04-30"]
+    master = master_for("AAA")
+    filings = filing_rows("AAA", ["2024-01-10"], ["2023-12-31"], [500.0])
+    late = filing_rows("AAA", ["2024-04-15"], ["2024-03-31"], [999.0])
+
+    def panel(closes, filings):
+        monthly = real.build_monthly_returns(price_rows("AAA", dates, closes), master)
+        return real.build_panel(monthly, real.build_fundamentals(filings, master, monthly))
+
+    base = panel([100.0, 110.0, 99.0, 105.0], filings)
+    shocked = panel([100.0, 110.0, 99.0, 1.0], pd.concat([filings, late]))
+    pd.testing.assert_frame_equal(base.iloc[:2], shocked.iloc[:2])
+    features = [c for c in base.columns if c != "fwd_ret"]
+    pd.testing.assert_series_equal(base.loc[2, features], shocked.loc[2, features])
+    assert base.loc[2, "fwd_ret"] != shocked.loc[2, "fwd_ret"]

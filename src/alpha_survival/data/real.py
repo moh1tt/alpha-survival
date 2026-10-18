@@ -274,3 +274,36 @@ def load_fundamentals(
     master = load_security_master(raw_dir)
     raw = pd.read_parquet(raw_dir / "fundamentals.parquet")
     return build_fundamentals(raw, master, keys, dimension)
+
+
+def build_panel(monthly: pd.DataFrame, fundamentals: pd.DataFrame) -> pd.DataFrame:
+    """Join returns and fundamentals into one row per (permaticker, month_end), plus the target.
+
+    Every column on a row is known at its `month_end`, except `fwd_ret`: the return
+    over the following month, i.e. what we forecast. Shifting it here, in one tested
+    place, stops each model from re-deriving the target (and getting it backwards).
+
+    `fwd_ret` is NaN when the next month is missing (gap, end of data), never a
+    multi-month return. A distress exit next month is already in that month's
+    return, so a stock that dies still counts against whoever held it.
+    """
+    keys = ["permaticker", "month_end"]
+    if monthly.duplicated(keys).any():
+        raise ValueError("monthly has duplicate (permaticker, month_end) rows")
+
+    panel = monthly.sort_values(keys).reset_index(drop=True)
+    by_stock = panel.groupby("permaticker")
+    next_month = by_stock["month_end"].shift(-1).dt.to_period("M")
+    panel["fwd_ret"] = by_stock["ret"].shift(-1)
+    consecutive = next_month == panel["month_end"].dt.to_period("M") + 1
+    panel.loc[~consecutive, "fwd_ret"] = float("nan")
+
+    return panel.merge(fundamentals, on=keys, how="left", validate="one_to_one")
+
+
+def load_panel(
+    raw_dir: Path = RAW_DIR, as_of: pd.Timestamp | None = None, dimension: str = "ART"
+) -> pd.DataFrame:
+    """Read everything from disk and build the monthly modelling panel."""
+    monthly = load_monthly_returns(raw_dir, as_of)
+    return build_panel(monthly, load_fundamentals(monthly, raw_dir, dimension))
