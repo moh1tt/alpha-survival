@@ -67,6 +67,25 @@ def test_unexpected_delisted_flag_raises():
         real.build_security_master(raw)
 
 
+def test_universe_keeps_us_common_stock_on_major_exchanges_including_delisted():
+    master = pd.DataFrame(
+        {
+            "permaticker": [1, 2, 3, 4, 5, 6],
+            "category": [
+                "Domestic Common Stock",
+                "Domestic Common Stock Secondary Class",
+                "ADR Common Stock",
+                "Domestic Preferred Stock",
+                "Domestic Common Stock",
+                "Domestic Common Stock Primary Class",
+            ],
+            "exchange": ["NYSE", "NASDAQ", "NYSE", "NYSE", "OTC", "NYSEMKT"],
+            "is_delisted": [False, True, False, False, False, True],
+        }
+    )
+    assert list(real.select_universe(master)["permaticker"]) == [1, 2, 6]
+
+
 # --- monthly returns -------------------------------------------------------
 
 
@@ -416,10 +435,16 @@ def test_duplicate_filing_rows_raise():
         real.build_fundamentals(filings, master_for("AAA"), keys_for(1, MONTHS))
 
 
-def test_filing_before_period_end_raises():
-    filings = filing_rows("AAA", ["2023-12-01"], ["2023-12-31"], [500.0])
-    with pytest.raises(ValueError, match="before their period ended"):
-        real.build_fundamentals(filings, master_for("AAA"), keys_for(1, MONTHS))
+def test_filing_before_period_end_is_dropped_with_warning():
+    # Found on the full history (e.g. a "FY1996" filing dated May 1996): the real
+    # filing came later, so the row must not be used at its impossible date.
+    filings = filing_rows(
+        "AAA", ["2023-12-01", "2024-02-14"], ["2023-12-31", "2023-12-31"], [999.0, 500.0]
+    )
+    with pytest.warns(UserWarning, match="dropped 1 ART filings"):
+        out = real.build_fundamentals(filings, master_for("AAA"), keys_for(1, MONTHS))
+    assert pd.isna(out["revenue"].iloc[0])
+    assert list(out["revenue"].iloc[1:]) == [500.0, 500.0]
 
 
 def test_unmapped_fundamentals_ticker_raises():

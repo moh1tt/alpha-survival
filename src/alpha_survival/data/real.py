@@ -62,6 +62,30 @@ def load_security_master(raw_dir: Path = RAW_DIR) -> pd.DataFrame:
     return build_security_master(pd.read_parquet(raw_dir / "tickers.parquet"))
 
 
+# The standard academic universe: US common stock on NYSE, AMEX (NYSEMKT) and Nasdaq,
+# i.e. CRSP share codes 10/11 and exchange codes 1-3 (e.g. Gu, Kelly & Xiu 2020).
+# Leaves out ADRs (currency effects), preferreds (bond-like) and Canadian listings.
+UNIVERSE_CATEGORIES = {
+    "Domestic Common Stock",
+    "Domestic Common Stock Primary Class",
+    "Domestic Common Stock Secondary Class",
+}
+UNIVERSE_EXCHANGES = {"NYSE", "NYSEMKT", "NASDAQ"}
+
+
+def select_universe(master: pd.DataFrame) -> pd.DataFrame:
+    """Keep the stocks in our research universe; delisted ones stay in.
+
+    Caveat: `category` and `exchange` are Sharadar's latest values, not their
+    history, so a stock that moved to OTC before dying is dropped. On the full
+    history only 6 stocks are on OTC, so the survivorship effect is negligible.
+    """
+    keep = master["category"].isin(UNIVERSE_CATEGORIES) & master["exchange"].isin(
+        UNIVERSE_EXCHANGES
+    )
+    return master[keep].reset_index(drop=True)
+
+
 def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
     """Turn daily `stocks` prices into one total return per stock per calendar month.
 
@@ -197,10 +221,17 @@ def load_monthly_returns(
 ) -> pd.DataFrame:
     """Read `stocks` + `actions` and build delisting-adjusted monthly returns.
 
-    `as_of` defaults to the latest price date in the file (when it was pulled).
+    Covers the research universe only (`select_universe`). `as_of` defaults to
+    the latest price date in the file (when it was pulled).
     """
     master = load_security_master(raw_dir)
-    stocks = pd.read_parquet(raw_dir / "stocks.parquet")
+    universe = select_universe(master)
+    # Read only what returns need: the full table is ~45M rows.
+    stocks = pd.read_parquet(
+        raw_dir / "stocks.parquet",
+        columns=["ticker", "date", "closeadj"],
+        filters=[("ticker", "in", list(universe["ticker"]))],
+    )
     monthly = build_monthly_returns(stocks, master)
     actions = pd.read_parquet(raw_dir / "actions.parquet")
     monthly = add_delisting_returns(monthly, actions, master, penalise_unexplained)
@@ -252,8 +283,15 @@ def build_fundamentals(
 
     if rows.duplicated(["ticker", "date"]).any():
         raise ValueError(f"fundamentals {dimension} has duplicate (ticker, date) rows")
-    if (rows["date"] < rows["reportperiod"]).any():
-        raise ValueError("fundamentals has filings dated before their period ended")
+    # Impossible dates (10 of ~690k ART rows, mostly 1996-97): the real filing came
+    # later, so trusting the date could leak. Drop them rather than fail the run.
+    early = rows["date"] < rows["reportperiod"]
+    if early.any():
+        warnings.warn(
+            f"dropped {early.sum()} {dimension} filings dated before their period ended",
+            stacklevel=2,
+        )
+        rows = rows[~early]
 
     ids = master.set_index("ticker")["permaticker"]
     unmapped = set(rows["ticker"]) - set(ids.index)
@@ -292,9 +330,17 @@ def build_fundamentals(
 def load_fundamentals(
     keys: pd.DataFrame, raw_dir: Path = RAW_DIR, dimension: str = "ART"
 ) -> pd.DataFrame:
-    """Read `fundamentals` + `tickers` from disk and build point-in-time fundamentals."""
+    """Read `fundamentals` + `tickers` from disk and build point-in-time fundamentals.
+
+    Reads only `dimension` rows for the stocks in `keys`: filings of companies
+    with no price history (23 tickers on the full file) can never join the panel.
+    """
     master = load_security_master(raw_dir)
-    raw = pd.read_parquet(raw_dir / "fundamentals.parquet")
+    tickers = master.loc[master["permaticker"].isin(keys["permaticker"]), "ticker"]
+    raw = pd.read_parquet(
+        raw_dir / "fundamentals.parquet",
+        filters=[("dimension", "==", dimension), ("ticker", "in", list(tickers))],
+    )
     return build_fundamentals(raw, master, keys, dimension)
 
 
