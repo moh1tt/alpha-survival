@@ -1,5 +1,6 @@
 """Tests for the data-quality checks. Small hand-made panels, no files or network."""
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -62,7 +63,13 @@ def test_extreme_returns_outside_band():
 
 def test_report_has_every_section():
     report = quality.render_report(panel_rows())
-    for title in ["Coverage by month", "Missing values", "Stale prices", "Stale filings"]:
+    for title in [
+        "Coverage by year",
+        "Flagged rows by year",
+        "Missing values",
+        "Stale prices",
+        "Stale filings",
+    ]:
         assert f"## {title}" in report
     assert "Rows: 4; stocks: 2" in report
 
@@ -75,3 +82,36 @@ def test_markdown_table_formats_cells():
         "| 2024-01-31 | 0.12 | 3 |  |",
     ]
     assert quality.markdown_table(df.iloc[:0]) == "None."
+
+
+def test_flags_by_year_counts_each_check():
+    prices = pd.DataFrame({"month_end": pd.to_datetime(["2023-01-31", "2024-01-31"])})
+    extremes = pd.DataFrame({"month_end": pd.to_datetime(["2024-03-31"] * 2)})
+    out = quality.flags_by_year({"stale_prices": prices, "extreme_returns": extremes})
+    assert out.to_dict("list") == {
+        "year": [2023, 2024],
+        "stale_prices": [1, 1],
+        "extreme_returns": [0, 2],
+    }
+
+
+def test_worst_ranks_falls_with_rises_in_log_terms():
+    extremes = quality.extreme_returns(
+        panel_rows(permaticker=[1, 2, 3, 4], ret=[1.5, -0.99, -0.6, 0.0])
+    )
+    top = quality.worst(extremes, np.log1p(extremes["ret"]).abs(), n=2)
+    assert list(top["ret"]) == [-0.99, 1.5]  # -99% is a bigger move than +150%
+
+
+def test_coverage_by_year_condenses_months():
+    cov = quality.coverage_by_year(quality.coverage_by_month(panel_rows()))
+    assert list(cov["year"]) == [2024]
+    assert cov.loc[0, "stocks_max"] == 2
+    assert cov.loc[0, "has_target"] == pytest.approx(0.5)
+
+
+def test_worst_shows_each_stock_once():
+    extremes = quality.extreme_returns(panel_rows(ret=[2.0, 3.0, 1.5, 0.0]))
+    top = quality.worst(extremes, extremes["ret"], n=5)
+    assert list(top["permaticker"]) == [1, 2]
+    assert list(top["ret"]) == [3.0, 1.5]  # stock 1's worst month only

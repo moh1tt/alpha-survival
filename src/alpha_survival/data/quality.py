@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from alpha_survival.data.real import load_panel
@@ -22,6 +23,9 @@ STALE_PRICE_DAYS = 7
 STALE_FILING_DAYS = 180
 # Monthly moves outside this band are either real events or data errors: list them.
 EXTREME_RETURN = (-0.5, 1.0)
+# The full universe flags tens of thousands of rows: the report shows counts per
+# year plus this many worst examples per check, never every row.
+WORST_N = 20
 
 REPORT_PATH = Path("reports/data_quality.md")
 
@@ -50,13 +54,15 @@ def missing_by_column(panel: pd.DataFrame) -> pd.Series:
 def stale_prices(panel: pd.DataFrame, max_days: int = STALE_PRICE_DAYS) -> pd.DataFrame:
     """Rows whose last trade was more than `max_days` before month end."""
     age = (panel["month_end"] - panel["last_trade_date"]).dt.days
-    return panel.loc[age > max_days, ["permaticker", "month_end", "last_trade_date"]]
+    out = panel.loc[age > max_days, ["permaticker", "month_end", "last_trade_date"]]
+    return out.assign(age_days=age[age > max_days].astype(int))
 
 
 def stale_filings(panel: pd.DataFrame, max_days: int = STALE_FILING_DAYS) -> pd.DataFrame:
     """Rows whose latest filing is more than `max_days` old at month end."""
     age = (panel["month_end"] - panel["filing_date"]).dt.days
-    return panel.loc[age > max_days, ["permaticker", "month_end", "filing_date"]]
+    out = panel.loc[age > max_days, ["permaticker", "month_end", "filing_date"]]
+    return out.assign(age_days=age[age > max_days].astype(int))
 
 
 def extreme_returns(
@@ -66,6 +72,28 @@ def extreme_returns(
     low, high = band
     hit = (panel["ret"] < low) | (panel["ret"] > high)
     return panel.loc[hit, ["permaticker", "month_end", "ret"]]
+
+
+def coverage_by_year(coverage: pd.DataFrame) -> pd.DataFrame:
+    """Condense monthly coverage to one row per year: stock-count range and mean shares."""
+    by_year = coverage.groupby(coverage.index.year)
+    out = by_year["stocks"].agg(stocks_min="min", stocks_median="median", stocks_max="max")
+    out = out.join(by_year[["has_ret", "has_target", "has_fundamentals"]].mean())
+    return out.rename_axis("year").reset_index()
+
+
+def flags_by_year(flags: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Count each check's flagged rows per year, so a bad vintage stands out."""
+    counts = {name: rows.groupby(rows["month_end"].dt.year).size() for name, rows in flags.items()}
+    out = pd.DataFrame(counts).fillna(0).astype(int)
+    return out.rename_axis("year").reset_index()
+
+
+def worst(rows: pd.DataFrame, key: pd.Series, n: int = WORST_N) -> pd.DataFrame:
+    """The `n` stocks with the largest `key`, one row each (their worst): examples to
+    inspect, not the full list. One row per stock stops a single bad history filling it."""
+    ranked = rows.loc[key.sort_values(ascending=False).index]
+    return ranked.drop_duplicates("permaticker").head(n)
 
 
 def markdown_table(df: pd.DataFrame) -> str:
@@ -103,20 +131,32 @@ def render_report(panel: pd.DataFrame) -> str:
         f"- Stale filings (latest filing > {STALE_FILING_DAYS} days old): {len(filings):,}",
         f"- Extreme returns (below {low:.0%} or above {high:.0%}): {len(extremes):,}",
         "",
-        "## Coverage by month",
+        "## Coverage by year",
         "",
-        markdown_table(coverage.reset_index()),
+        "Stocks per month (min / median / max) and mean share of rows with each field.",
+        "",
+        markdown_table(coverage_by_year(coverage)),
         "",
         "## Missing values by column",
         "",
         markdown_table(missing.rename_axis("column").rename("share_missing").reset_index()),
+        "",
+        "## Flagged rows by year",
+        "",
+        markdown_table(
+            flags_by_year(
+                {"stale_prices": prices, "stale_filings": filings, "extreme_returns": extremes}
+            )
+        ),
     ]
-    for title, rows in [
-        ("Stale prices", prices),
-        ("Stale filings", filings),
-        ("Extreme returns", extremes),
-    ]:
-        lines += ["", f"## {title}", "", markdown_table(rows)]
+    examples = [
+        ("Stale prices", prices, prices["age_days"]),
+        ("Stale filings", filings, filings["age_days"]),
+        # Size of the move in log terms, so -99% ranks with +9,900%.
+        ("Extreme returns", extremes, np.log1p(extremes["ret"]).abs()),
+    ]
+    for title, rows, key in examples:
+        lines += ["", f"## {title}: {WORST_N} worst stocks", "", markdown_table(worst(rows, key))]
     return "\n".join(lines) + "\n"
 
 
