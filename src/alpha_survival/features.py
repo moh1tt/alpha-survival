@@ -53,6 +53,21 @@ def add_size(panel: pd.DataFrame) -> pd.DataFrame:
     return panel.assign(log_mcap=np.log(market_cap))
 
 
+def add_value(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `bm`: book-to-market, latest filed book equity over month-end market cap.
+
+    Cheap stocks (high B/M) have historically earned more (Fama & French 1992).
+    "Timely" version (Asness & Frazzini 2013): the latest filing public at month_end
+    against today's price, rather than Fama-French's December book value used for
+    a year. `equityusd`, not `equity`: some filers report in other currencies and
+    `market_cap` is in USD. NaN if book equity <= 0 (ratio is meaningless) or
+    either input is missing. Uses only the row's own columns: no look-ahead.
+    """
+    book = panel["equityusd"].where(panel["equityusd"] > 0)
+    market = panel["market_cap"].where(panel["market_cap"] > 0)
+    return panel.assign(bm=book / market)
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 

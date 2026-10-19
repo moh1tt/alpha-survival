@@ -127,3 +127,23 @@ def test_rank_normalise_several_columns_and_suffix():
     out = features.rank_normalise(rows, ["x", "y"], suffix="_r")
     assert out["x_r"].tolist() == [-1.0, 0.0, 1.0]
     assert out["y_r"].tolist() == [1.0, 0.0, -1.0]
+
+
+def test_add_value_is_book_over_market_in_usd():
+    rows = pd.DataFrame(
+        {
+            "equity": [50.0, 900.0, -10.0, 5.0, np.nan],  # 900 is in a foreign currency
+            "equityusd": [50.0, 100.0, -10.0, 5.0, np.nan],
+            "market_cap": [100.0, 400.0, 100.0, 0.0, 100.0],
+        }
+    )
+    out = features.add_value(rows)
+    # USD book / USD market; negative book, zero cap and missing inputs -> NaN.
+    assert out["bm"].tolist()[:2] == [0.5, 0.25]
+    assert out["bm"].iloc[2:].isna().all()
+
+
+def test_add_value_uses_only_the_row_itself():
+    rows = pd.DataFrame({"equityusd": [10.0, 20.0], "market_cap": [100.0, 100.0]})
+    changed = rows.assign(equityusd=[10.0, 1e9])  # e.g. a later filing on another row
+    assert features.add_value(rows)["bm"].iloc[0] == features.add_value(changed)["bm"].iloc[0]

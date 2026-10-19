@@ -15,7 +15,7 @@ from sklearn.linear_model import LinearRegression, Ridge
 
 from alpha_survival.data.quality import markdown_table
 from alpha_survival.data.real import load_panel
-from alpha_survival.features import add_momentum, add_size, rank_normalise
+from alpha_survival.features import add_momentum, add_size, add_value, rank_normalise
 from alpha_survival.metrics import ic_summary, oos_r2, rank_ic
 from alpha_survival.models import (
     Forecaster,
@@ -27,7 +27,7 @@ from alpha_survival.models import (
 from alpha_survival.walkforward import walk_forward_predict
 
 REPORT_PATH = Path("reports/baselines.md")
-RAW_FEATURES = ["mom_12_1", "log_mcap"]
+RAW_FEATURES = ["mom_12_1", "log_mcap", "bm"]
 FEATURES = [f"{c}_rank" for c in RAW_FEATURES]
 # Rolling window: train only on the latest 5 years, so old regimes are forgotten.
 ROLLING_WINDOW = 60
@@ -39,6 +39,7 @@ def baseline_models() -> list[Forecaster]:
         HistoricalMean(),
         SignalForecast("mom_12_1"),
         SignalForecast("log_mcap"),
+        SignalForecast("bm"),
         SklearnForecaster(LinearRegression(), FEATURES, "ols"),
         SklearnForecaster(Ridge(alpha=1.0), FEATURES, "ridge"),
     ]
@@ -46,7 +47,7 @@ def baseline_models() -> list[Forecaster]:
 
 def rolling_models() -> list[Forecaster]:
     """Models rerun with a rolling window. Only ones that learn: a raw signal has no
-    training set to roll, and Ridge equals OLS with two features."""
+    training set to roll, and Ridge equals OLS with this few features."""
     return [HistoricalMean(), SklearnForecaster(LinearRegression(), FEATURES, "ols")]
 
 
@@ -57,7 +58,7 @@ def prepare(panel: pd.DataFrame) -> pd.DataFrame:
     price cut, so features come first and the investable filter second. Ranks come
     last, so each stock is ranked among the stocks that could actually be bought.
     """
-    panel = add_size(add_momentum(panel))
+    panel = add_value(add_size(add_momentum(panel)))
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
 
@@ -131,8 +132,10 @@ def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
             f"{panel['month_end'].min():%Y-%m} to {panel['month_end'].max():%Y-%m}, "
             f"{len(panel):,} stock-months, {panel['permaticker'].nunique():,} stocks.",
             "- Models: `zero` and `hist_mean` (pooled training mean) baselines; raw signals "
-            "`mom_12_1` (12-1 momentum) and `log_mcap` (log size); `ols` and `ridge` "
-            "(alpha=1, untuned) on both features rank-normalised to [-1, 1] each month.",
+            "`mom_12_1` (12-1 momentum), `log_mcap` (log size) and `bm` (book-to-market: "
+            "latest filed USD book equity / month-end market cap, NaN if book <= 0); "
+            "`ols` and `ridge` (alpha=1, untuned) on all three rank-normalised to [-1, 1] "
+            "each month.",
             "- Splits: first 60 months train only, 12-month test blocks, model refit at the "
             "start of each block, horizon 1, embargo 0. `window`: `expanding` trains on all "
             f"months so far; `rolling {ROLLING_WINDOW}m` on the latest {ROLLING_WINDOW} only. "
