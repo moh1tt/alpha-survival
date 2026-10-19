@@ -43,6 +43,7 @@ def test_evaluate_scores_each_model_the_right_way():
         "signal_mom_12_1",
         "signal_log_mcap",
         "signal_bm",
+        "signal_rev_1m",
         "ols",
         "ridge",
     ]
@@ -51,8 +52,18 @@ def test_evaluate_scores_each_model_the_right_way():
     assert np.isfinite(table.loc["hist_mean", "oos_r2_pct"])
     # Constant forecasts have no rank IC; raw signals have no R^2.
     assert table.loc[["zero", "hist_mean"], "mean_ic"].isna().all()
-    assert table.loc[["signal_mom_12_1", "signal_log_mcap", "signal_bm"], "oos_r2_pct"].isna().all()
-    assert table.loc[["signal_mom_12_1", "signal_log_mcap", "signal_bm"], "ic_months"].gt(0).all()
+    assert (
+        table.loc[
+            ["signal_mom_12_1", "signal_log_mcap", "signal_bm", "signal_rev_1m"], "oos_r2_pct"
+        ]
+        .isna()
+        .all()
+    )
+    assert (
+        table.loc[["signal_mom_12_1", "signal_log_mcap", "signal_bm", "signal_rev_1m"], "ic_months"]
+        .gt(0)
+        .all()
+    )
     # Learned models forecast returns AND order stocks: both metrics.
     assert table.loc[["ols", "ridge"], ["oos_r2_pct", "mean_ic"]].notna().all().all()
     assert (table["first_test_month"] == MONTHS[12].date()).all()
@@ -77,7 +88,7 @@ def test_prepare_ranks_among_investable_stocks_only():
     in_month = out[out["month_end"] == MONTHS[20]]
     assert in_month["log_mcap_rank"].max() == 1.0
     assert in_month["log_mcap_rank"].min() == -1.0
-    assert out[["mom_12_1_rank", "log_mcap_rank", "bm_rank"]].notna().all().all()
+    assert out[["mom_12_1_rank", "log_mcap_rank", "bm_rank", "rev_1m_rank"]].notna().all().all()
 
 
 def test_run_all_adds_rolling_runs_with_the_same_test_period():

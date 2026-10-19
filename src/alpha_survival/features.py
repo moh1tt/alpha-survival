@@ -42,6 +42,18 @@ def add_momentum(panel: pd.DataFrame) -> pd.DataFrame:
     return panel.assign(mom_12_1=(growth - 1).where(consecutive))
 
 
+def add_reversal(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `rev_1m`: the stock's return over month t itself.
+
+    Last month's losers tend to bounce back and winners to give some back
+    (Jegadeesh 1990), so expect a NEGATIVE relation with `fwd_ret`; this is why
+    momentum skips month t. Part of the effect is bid-ask bounce in month-end
+    closes, which the $5 investable cut dampens. The row's own `ret`, known at
+    month_end: no look-ahead. NaN where `ret` is (e.g. after a gap).
+    """
+    return panel.assign(rev_1m=panel["ret"])
+
+
 def add_size(panel: pd.DataFrame) -> pd.DataFrame:
     """Add `log_mcap`: log of the month-end market cap (USD).
 

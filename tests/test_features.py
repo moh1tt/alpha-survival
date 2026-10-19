@@ -147,3 +147,13 @@ def test_add_value_uses_only_the_row_itself():
     rows = pd.DataFrame({"equityusd": [10.0, 20.0], "market_cap": [100.0, 100.0]})
     changed = rows.assign(equityusd=[10.0, 1e9])  # e.g. a later filing on another row
     assert features.add_value(rows)["bm"].iloc[0] == features.add_value(changed)["bm"].iloc[0]
+
+
+def test_add_reversal_is_this_months_return_never_the_target():
+    panel = panel_for(1, [0.10, -0.20, np.nan, 0.05])
+    out = features.add_reversal(panel)
+    assert out["rev_1m"].tolist()[:2] == [0.10, -0.20]
+    assert np.isnan(out["rev_1m"].iloc[2])
+    # Leakage check: changing next month's return (fwd_ret) cannot move it.
+    shocked = features.add_reversal(panel.assign(fwd_ret=panel["fwd_ret"] * 100))
+    assert shocked["rev_1m"].equals(out["rev_1m"])
