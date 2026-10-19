@@ -24,8 +24,9 @@ def oos_r2(oos: pd.DataFrame) -> float:
     """Out-of-sample R^2 against a zero forecast, pooled over all stock-months.
 
     1 - sum((r - pred)^2) / sum(r^2) (Gu, Kelly & Xiu 2020). The benchmark is 0, not
-    the historical mean: the mean is itself a noisy estimate that tends to forecast
-    worse than 0, so beating it would be too easy. > 0 beats 'predict 0'.
+    the historical mean: they argue historical mean returns of individual stocks are
+    too noisy to be a fair bar. Zero is also fixed, so every model faces the same
+    bar in every fold. > 0 beats 'predict 0'.
     """
     rows = _complete(oos)
     r, pred = rows[TARGET].to_numpy(), rows["pred"].to_numpy()
