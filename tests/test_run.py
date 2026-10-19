@@ -28,6 +28,9 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["assets"] = panel["market_cap"] * rng.uniform(0.5, 3, len(panel))
     panel["gp"] = panel["assets"] * rng.normal(0.2, 0.1, len(panel))
     panel["cor"] = 1.0
+    panel["n_days"] = 21
+    panel["dret_sum"] = rng.normal(0, 0.05, len(panel))
+    panel["dret_sumsq"] = 21 * rng.uniform(0.0001, 0.002, len(panel))
     panel["investable"] = True
     return panel
 
@@ -56,6 +59,7 @@ def test_evaluate_scores_each_model_the_right_way():
         "signal_rev_1m",
         "signal_gp_a",
         "signal_asset_growth",
+        "signal_vol_3m",
         "ols",
         "ridge",
     ]
@@ -91,21 +95,7 @@ def test_prepare_ranks_among_investable_stocks_only():
     in_month = out[out["month_end"] == MONTHS[20]]
     assert in_month["log_mcap_rank"].max() == 1.0
     assert in_month["log_mcap_rank"].min() == -1.0
-    assert (
-        out[
-            [
-                "mom_12_1_rank",
-                "log_mcap_rank",
-                "bm_rank",
-                "rev_1m_rank",
-                "gp_a_rank",
-                "asset_growth_rank",
-            ]
-        ]
-        .notna()
-        .all()
-        .all()
-    )
+    assert out[[f"{c}_rank" for c in RAW_FEATURES]].notna().all().all()
 
 
 def test_run_all_adds_rolling_runs_with_the_same_test_period():

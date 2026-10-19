@@ -171,6 +171,33 @@ def test_stocks_do_not_bleed_into_each_other():
     assert out.loc[2, "ret"].iloc[1] == pytest.approx(9 / 10 - 1)
 
 
+def test_daily_return_moments_per_month():
+    stocks = pd.concat(
+        [
+            price_rows(
+                "AAA",
+                ["2024-01-30", "2024-01-31", "2024-02-01", "2024-02-02"],
+                [100.0, 110.0, 99.0, 99.0],
+            ),
+            price_rows("BBB", ["2024-02-01", "2024-02-02"], [10.0, 20.0]),
+        ]
+    )
+    out = real.build_monthly_returns(stocks, master_for("AAA", "BBB")).set_index(
+        ["permaticker", "month_end"]
+    )
+    jan, feb = pd.Timestamp("2024-01-31"), pd.Timestamp("2024-02-29")
+    # AAA: Jan has one daily return (+10%; Jan 30 is its first day), Feb has
+    # -10% (Jan 31 -> Feb 1, counted in the month it ends) and 0%.
+    assert out.loc[(1, jan), "n_days"] == 1
+    assert out.loc[(1, jan), "dret_sum"] == pytest.approx(0.10)
+    assert out.loc[(1, feb), "n_days"] == 2
+    assert out.loc[(1, feb), "dret_sum"] == pytest.approx(-0.10)
+    assert out.loc[(1, feb), "dret_sumsq"] == pytest.approx(0.01)
+    # BBB's first day does not use AAA's last price.
+    assert out.loc[(2, feb), "n_days"] == 1
+    assert out.loc[(2, feb), "dret_sum"] == pytest.approx(1.0)
+
+
 def test_no_return_depends_on_future_prices():
     # Leakage test: changing prices after Feb must leave Jan and Feb returns untouched.
     dates = ["2024-01-31", "2024-02-29", "2024-03-28", "2024-04-30"]

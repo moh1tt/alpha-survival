@@ -92,6 +92,45 @@ def add_asset_growth(panel: pd.DataFrame) -> pd.DataFrame:
     return panel.assign(asset_growth=now / before - 1)
 
 
+# Volatility over months t-2 .. t, from daily returns; fewer days than this -> NaN.
+VOLATILITY_MONTHS = 3
+VOLATILITY_MIN_DAYS = 40
+
+
+def add_volatility(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `vol_3m`: std of daily returns over months t-2 .. t (not annualised).
+
+    Volatile stocks have earned less than calm ones (Ang, Hodrick, Xing & Zhang
+    2006), so expect a NEGATIVE relation with `fwd_ret`. Total, not idiosyncratic,
+    volatility. Built from each month's daily-return count, sum and sum of squares
+    (`n_days`, `dret_sum`, `dret_sumsq`), pooled over the same stock's rows for the
+    3 calendar months ending at t; a missing month just adds no days. All daily
+    returns are on or before month_end: no look-ahead.
+    """
+    keys = ["permaticker", "month_end"]
+    if panel.duplicated(keys).any():
+        raise ValueError("panel has duplicate (permaticker, month_end) rows")
+
+    moments = ["n_days", "dret_sum", "dret_sumsq"]
+    own = panel[keys + moments].fillna({m: 0 for m in moments})
+    pooled = own[moments].copy()
+    for lag in range(1, VOLATILITY_MONTHS):
+        # Row from `lag` calendar months back, relabelled to this month.
+        shifted = own.assign(
+            month_end=(own["month_end"].dt.to_period("M") + lag)
+            .dt.to_timestamp(how="end")
+            .dt.normalize()
+            .astype(own["month_end"].dtype)
+        )
+        back = own[keys].merge(shifted, on=keys, how="left", validate="one_to_one")
+        pooled += back[moments].fillna(0).to_numpy()
+
+    n, total, total_sq = pooled["n_days"], pooled["dret_sum"], pooled["dret_sumsq"]
+    enough = n >= VOLATILITY_MIN_DAYS
+    variance = (total_sq - total**2 / n.where(enough)) / (n.where(enough) - 1)
+    return panel.assign(vol_3m=np.sqrt(variance.clip(lower=0)).to_numpy())
+
+
 def add_reversal(panel: pd.DataFrame) -> pd.DataFrame:
     """Add `rev_1m`: the stock's return over month t itself.
 

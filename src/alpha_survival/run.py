@@ -22,6 +22,7 @@ from alpha_survival.features import (
     add_reversal,
     add_size,
     add_value,
+    add_volatility,
     rank_normalise,
 )
 from alpha_survival.metrics import ic_summary, oos_r2, rank_ic
@@ -35,7 +36,7 @@ from alpha_survival.models import (
 from alpha_survival.walkforward import walk_forward_predict
 
 REPORT_PATH = Path("reports/baselines.md")
-RAW_FEATURES = ["mom_12_1", "log_mcap", "bm", "rev_1m", "gp_a", "asset_growth"]
+RAW_FEATURES = ["mom_12_1", "log_mcap", "bm", "rev_1m", "gp_a", "asset_growth", "vol_3m"]
 FEATURES = [f"{c}_rank" for c in RAW_FEATURES]
 # Rolling window: train only on the latest 5 years, so old regimes are forgotten.
 ROLLING_WINDOW = 60
@@ -51,6 +52,7 @@ def baseline_models() -> list[Forecaster]:
         SignalForecast("rev_1m"),
         SignalForecast("gp_a"),
         SignalForecast("asset_growth"),
+        SignalForecast("vol_3m"),
         SklearnForecaster(LinearRegression(), FEATURES, "ols"),
         SklearnForecaster(Ridge(alpha=1.0), FEATURES, "ridge"),
     ]
@@ -70,7 +72,7 @@ def prepare(panel: pd.DataFrame) -> pd.DataFrame:
     last, so each stock is ranked among the stocks that could actually be bought.
     """
     panel = add_reversal(add_value(add_size(add_momentum(panel))))
-    panel = add_asset_growth(add_profitability(panel))
+    panel = add_volatility(add_asset_growth(add_profitability(panel)))
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
 
@@ -148,8 +150,9 @@ def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
             "latest filed USD book equity / month-end market cap, NaN if book <= 0) and "
             "`rev_1m` (this month's return, short-term reversal; expect a NEGATIVE IC) and "
             "`gp_a` (gross profit / total assets, NaN where cost of revenue is 0) and "
-            "`asset_growth` (assets vs. 12 months earlier; expect a NEGATIVE IC); "
-            "`ols` and `ridge` (alpha=1, untuned) on all six rank-normalised to [-1, 1] "
+            "`asset_growth` (assets vs. 12 months earlier; expect a NEGATIVE IC) and "
+            "`vol_3m` (std of daily returns over the last 3 months; expect a NEGATIVE IC); "
+            "`ols` and `ridge` (alpha=1, untuned) on all seven rank-normalised to [-1, 1] "
             "each month.",
             "- Splits: first 60 months train only, 12-month test blocks, model refit at the "
             "start of each block, horizon 1, embargo 0. `window`: `expanding` trains on all "

@@ -226,3 +226,56 @@ def test_asset_growth_rejects_duplicate_rows():
     panel = assets_panel([100.0, 110.0])
     with pytest.raises(ValueError, match="duplicate"):
         features.add_asset_growth(pd.concat([panel, panel]))
+
+
+def moments_panel(daily_by_month, start="2020-01-31", permaticker=1):
+    """Panel rows carrying each month's daily-return count, sum and sum of squares."""
+    months = pd.date_range(start, periods=len(daily_by_month), freq="ME")
+    return pd.DataFrame(
+        {
+            "permaticker": permaticker,
+            "month_end": months,
+            "n_days": [len(d) for d in daily_by_month],
+            "dret_sum": [float(np.sum(d)) for d in daily_by_month],
+            "dret_sumsq": [float(np.sum(np.square(d))) for d in daily_by_month],
+        }
+    )
+
+
+def test_volatility_matches_std_of_the_pooled_daily_returns():
+    rng = np.random.default_rng(0)
+    daily = [rng.normal(0, 0.02, 21) for _ in range(5)]
+    out = features.add_volatility(moments_panel(daily))
+    assert np.isnan(out["vol_3m"].iloc[0])  # 21 days < 40
+    assert out["vol_3m"].iloc[1] == pytest.approx(np.std(np.concatenate(daily[:2]), ddof=1))
+    for t in range(2, 5):
+        expected = np.std(np.concatenate(daily[t - 2 : t + 1]), ddof=1)
+        assert out["vol_3m"].iloc[t] == pytest.approx(expected)
+
+
+def test_volatility_missing_month_adds_no_days_and_min_days_applies():
+    rng = np.random.default_rng(1)
+    daily = [rng.normal(0, 0.02, 21) for _ in range(4)]
+    panel = moments_panel(daily).drop(index=1)  # month 1 has no row at all
+    out = features.add_volatility(panel).set_index("month_end")["vol_3m"]
+    months = pd.date_range("2020-01-31", periods=4, freq="ME")
+    # Month 2 pools months 0 and 2; month 3 pools months 2 and 3 (42 days each).
+    assert out[months[2]] == pytest.approx(np.std(np.concatenate([daily[0], daily[2]]), ddof=1))
+    assert out[months[3]] == pytest.approx(np.std(np.concatenate(daily[2:4]), ddof=1))
+
+    short = features.add_volatility(moments_panel([rng.normal(0, 0.02, 13) for _ in range(3)]))
+    assert np.isnan(short["vol_3m"].iloc[2])  # 39 days < 40
+
+
+def test_volatility_ignores_later_months_and_other_stocks():
+    rng = np.random.default_rng(2)
+    a = moments_panel([rng.normal(0, 0.02, 21) for _ in range(6)])
+    b = moments_panel([rng.normal(0, 0.05, 21) for _ in range(6)], permaticker=2)
+    base = features.add_volatility(pd.concat([a, b], ignore_index=True))
+    # Leakage check: wild daily returns after month 3, and a different other stock.
+    a_future = a.copy()
+    a_future.loc[4:, ["dret_sum", "dret_sumsq"]] = 1e6
+    shocked = features.add_volatility(
+        pd.concat([a_future, b.assign(dret_sumsq=9.0)], ignore_index=True)
+    )
+    assert base["vol_3m"].iloc[:4].equals(shocked["vol_3m"].iloc[:4])

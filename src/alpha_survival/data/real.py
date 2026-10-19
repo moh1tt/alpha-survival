@@ -95,13 +95,19 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     rewrites its past levels every time a dividend is paid, so a historical
     level is not what anyone could have seen on that date (look-ahead).
 
-    Columns: permaticker, month_end, ret, last_trade_date, close_unadj, close_split_adj.
+    Columns: permaticker, month_end, ret, last_trade_date, close_unadj, close_split_adj,
+    n_days, dret_sum, dret_sumsq.
     `last_trade_date` lets later steps spot stale prices (no trade near month end).
     `close_unadj` is the last close as actually traded (no split adjustment), the
     price an investor saw at month end; `close` is split-adjusted backwards, so a
     later reverse split would inflate it (look-ahead). `close_split_adj` is that
     `close`, kept only to multiply with SF1 share counts, which Sharadar restates
     for the same splits (see `add_market_cap`); never use it alone.
+
+    `n_days`, `dret_sum`, `dret_sumsq`: count, sum and sum of squares of the
+    month's daily `closeadj` returns (a stock's first day has none). Enough to
+    rebuild the std of daily returns over any run of months (see
+    `features.add_volatility`) without reading the daily data again.
     """
     if stocks.duplicated(["ticker", "date"]).any():
         raise ValueError("stocks has duplicate (ticker, date) rows")
@@ -119,9 +125,17 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     )
     # The vendor delivers newest-first; sort so "last" really means latest.
     daily = daily.sort_values(["permaticker", "date"])
+    prev_daily = daily.groupby("permaticker")["closeadj"].shift(1)
+    daily["dret"] = daily["closeadj"] / prev_daily - 1
+    moments = (
+        daily.assign(dret_sq=daily["dret"] ** 2)
+        .groupby(["permaticker", "month"])
+        .agg(n_days=("dret", "count"), dret_sum=("dret", "sum"), dret_sumsq=("dret_sq", "sum"))
+    )
 
     monthly = (
-        daily.groupby(["permaticker", "month"], as_index=False)
+        daily.drop(columns="dret")
+        .groupby(["permaticker", "month"], as_index=False)
         .last()
         .rename(
             columns={
@@ -142,8 +156,10 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     gap = prev_month.notna() & (monthly["month"] != prev_month + 1)
     monthly.loc[gap, "ret"] = float("nan")
 
+    monthly = monthly.merge(moments, on=["permaticker", "month"], how="left", validate="one_to_one")
     monthly["month_end"] = monthly["month"].dt.to_timestamp(how="end").dt.normalize()
     cols = ["permaticker", "month_end", "ret", "last_trade_date", "close_unadj", "close_split_adj"]
+    cols += ["n_days", "dret_sum", "dret_sumsq"]
     return monthly[cols].reset_index(drop=True)
 
 
