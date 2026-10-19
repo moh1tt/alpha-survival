@@ -177,3 +177,52 @@ def test_add_profitability_uses_only_the_row_itself():
     changed = rows.assign(gp=[10.0, 1e9])
     a = features.add_profitability(rows)["gp_a"].iloc[0]
     assert a == features.add_profitability(changed)["gp_a"].iloc[0]
+
+
+def assets_panel(assets, start="2020-01-31", permaticker=1):
+    months = pd.date_range(start, periods=len(assets), freq="ME")
+    return pd.DataFrame(
+        {"permaticker": permaticker, "month_end": months, "assets": pd.Series(assets, dtype=float)}
+    )
+
+
+def test_asset_growth_compares_with_the_row_twelve_months_earlier():
+    assets = [100.0] * 3 + [110.0] * 9 + [150.0, 120.0, 0.0, 130.0]
+    out = features.add_asset_growth(assets_panel(assets))
+    assert out["asset_growth"].iloc[:12].isna().all()  # no year-ago row yet
+    # Month 12 vs month 0 (100), month 13 vs month 1 (100), month 15 vs month 3 (110).
+    assert out["asset_growth"].iloc[12] == pytest.approx(0.5)
+    assert out["asset_growth"].iloc[13] == pytest.approx(0.2)
+    assert np.isnan(out["asset_growth"].iloc[14])  # zero assets now
+    assert out["asset_growth"].iloc[15] == pytest.approx(130 / 110 - 1)
+
+
+def test_asset_growth_gap_gives_nan_not_a_longer_window():
+    panel = assets_panel([100.0 + i for i in range(20)]).drop(index=2)  # month 2 missing
+    out = features.add_asset_growth(panel).set_index("month_end")["asset_growth"]
+    months = pd.date_range("2020-01-31", periods=20, freq="ME")
+    assert np.isnan(out[months[14]])  # its year-ago row (month 2) is gone
+    assert out[months[15]] == pytest.approx(115 / 103 - 1)  # unaffected neighbours
+
+
+def test_asset_growth_ignores_the_future_and_other_stocks():
+    a = assets_panel([100.0 + i for i in range(24)])
+    b = assets_panel([5.0] * 24, permaticker=2)
+    base = features.add_asset_growth(pd.concat([a, b], ignore_index=True))
+    # Leakage check: rewrite every row after month 15 and the other stock entirely.
+    a_future = a.assign(assets=np.where(a.index > 15, 1e9, a["assets"]))
+    shocked = features.add_asset_growth(
+        pd.concat([a_future, b.assign(assets=1.0)], ignore_index=True)
+    )
+    first = base["permaticker"] == 1
+    assert (
+        base.loc[first, "asset_growth"]
+        .iloc[:16]
+        .equals(shocked.loc[first, "asset_growth"].iloc[:16])
+    )
+
+
+def test_asset_growth_rejects_duplicate_rows():
+    panel = assets_panel([100.0, 110.0])
+    with pytest.raises(ValueError, match="duplicate"):
+        features.add_asset_growth(pd.concat([panel, panel]))

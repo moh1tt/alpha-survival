@@ -3,7 +3,7 @@
 **Real data (Sharadar US equities), out-of-sample, walk-forward. No transaction costs; not a trading result.**
 
 - Panel: investable rows (price >= $5 at month end), 1997-12 to 2026-09, 1,362,457 stock-months, 16,118 stocks.
-- Models: `zero` and `hist_mean` (pooled training mean) baselines; raw signals `mom_12_1` (12-1 momentum), `log_mcap` (log size) and `bm` (book-to-market: latest filed USD book equity / month-end market cap, NaN if book <= 0) and `rev_1m` (this month's return, short-term reversal; expect a NEGATIVE IC) and `gp_a` (gross profit / total assets, NaN where cost of revenue is 0); `ols` and `ridge` (alpha=1, untuned) on all five rank-normalised to [-1, 1] each month.
+- Models: `zero` and `hist_mean` (pooled training mean) baselines; raw signals `mom_12_1` (12-1 momentum), `log_mcap` (log size) and `bm` (book-to-market: latest filed USD book equity / month-end market cap, NaN if book <= 0) and `rev_1m` (this month's return, short-term reversal; expect a NEGATIVE IC) and `gp_a` (gross profit / total assets, NaN where cost of revenue is 0) and `asset_growth` (assets vs. 12 months earlier; expect a NEGATIVE IC); `ols` and `ridge` (alpha=1, untuned) on all six rank-normalised to [-1, 1] each month.
 - Splits: first 60 months train only, 12-month test blocks, model refit at the start of each block, horizon 1, embargo 0. `window`: `expanding` trains on all months so far; `rolling 60m` on the latest 60 only. Both start testing in the same month.
 - `oos_r2_pct`: pooled R^2 vs. a zero forecast, in percent (Gu, Kelly & Xiu 2020). Blank for raw signals, whose scale is not a return.
 - `mean_ic`: average monthly Spearman rank correlation of forecast with next-month return; months with < 10 stocks skipped. Blank for constant forecasts. `signal_log_mcap` is log size, so a small-firm premium shows as a NEGATIVE IC.
@@ -18,7 +18,8 @@
 | signal_bm | expanding | 2002-12-31 | 2026-09-30 | 956,039 |  | 0.0081 | 1.25 | 1.10 | 0.10 | 0.505 | 285 |
 | signal_rev_1m | expanding | 2002-12-31 | 2026-09-30 | 1,050,412 |  | -0.0205 | -3.23 | -3.72 | -0.12 | 0.418 | 285 |
 | signal_gp_a | expanding | 2002-12-31 | 2026-09-30 | 756,965 |  | 0.0110 | 2.44 | 2.27 | 0.13 | 0.582 | 285 |
-| ols | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.152 | 0.0248 | 5.05 | 4.89 | 0.00 | 0.653 | 285 |
-| ridge | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.152 | 0.0248 | 5.05 | 4.89 | 0.00 | 0.653 | 285 |
+| signal_asset_growth | expanding | 2002-12-31 | 2026-09-30 | 944,218 |  | 0.0020 | 0.56 | 0.46 | 0.15 | 0.512 | 285 |
+| ols | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.141 | 0.0233 | 4.89 | 4.76 | 0.01 | 0.635 | 285 |
+| ridge | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.141 | 0.0233 | 4.89 | 4.76 | 0.01 | 0.635 | 285 |
 | hist_mean | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.192 |  |  |  |  |  | 0 |
-| ols | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.270 | 0.0227 | 4.01 | 3.97 | -0.03 | 0.604 | 285 |
+| ols | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.277 | 0.0215 | 3.85 | 3.82 | -0.03 | 0.596 | 285 |

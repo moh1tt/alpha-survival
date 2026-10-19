@@ -58,6 +58,40 @@ def add_profitability(panel: pd.DataFrame) -> pd.DataFrame:
     return panel.assign(gp_a=gross_profit / assets)
 
 
+ASSET_GROWTH_MONTHS = 12
+
+
+def add_asset_growth(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `asset_growth`: total assets now over total assets 12 months ago, minus 1.
+
+    Fast-growing firms tend to earn less afterwards (Cooper, Gulen & Schill 2008),
+    so expect a NEGATIVE relation with `fwd_ret`. "Now" is the row's own `assets`
+    (latest filing public at month_end); "12 months ago" is `assets` on the same
+    stock's row dated exactly 12 calendar months earlier, i.e. what was public then.
+    Both were known by month_end: no look-ahead. Matched on the calendar month, not
+    12 rows back, so a gap in the history gives NaN rather than a longer window.
+    NaN if either value is missing or <= 0.
+    """
+    keys = ["permaticker", "month_end"]
+    if panel.duplicated(keys).any():
+        raise ValueError("panel has duplicate (permaticker, month_end) rows")
+
+    # Each row's assets, relabelled as the "year-ago" value of the row 12 months later.
+    shifted_month = panel["month_end"].dt.to_period("M") + ASSET_GROWTH_MONTHS
+    year_ago = pd.DataFrame(
+        {
+            "permaticker": panel["permaticker"],
+            "month_end": shifted_month.dt.to_timestamp(how="end").dt.normalize(),
+            "assets_year_ago": panel["assets"],
+        }
+    ).astype({"month_end": panel["month_end"].dtype})
+    matched = panel[keys].merge(year_ago, on=keys, how="left", validate="one_to_one")
+
+    now = panel["assets"].where(panel["assets"] > 0).to_numpy()
+    before = matched["assets_year_ago"].where(matched["assets_year_ago"] > 0).to_numpy()
+    return panel.assign(asset_growth=now / before - 1)
+
+
 def add_reversal(panel: pd.DataFrame) -> pd.DataFrame:
     """Add `rev_1m`: the stock's return over month t itself.
 

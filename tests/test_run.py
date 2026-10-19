@@ -55,6 +55,7 @@ def test_evaluate_scores_each_model_the_right_way():
         "signal_bm",
         "signal_rev_1m",
         "signal_gp_a",
+        "signal_asset_growth",
         "ols",
         "ridge",
     ]
@@ -91,7 +92,16 @@ def test_prepare_ranks_among_investable_stocks_only():
     assert in_month["log_mcap_rank"].max() == 1.0
     assert in_month["log_mcap_rank"].min() == -1.0
     assert (
-        out[["mom_12_1_rank", "log_mcap_rank", "bm_rank", "rev_1m_rank", "gp_a_rank"]]
+        out[
+            [
+                "mom_12_1_rank",
+                "log_mcap_rank",
+                "bm_rank",
+                "rev_1m_rank",
+                "gp_a_rank",
+                "asset_growth_rank",
+            ]
+        ]
         .notna()
         .all()
         .all()
