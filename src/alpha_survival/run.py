@@ -33,6 +33,7 @@ from alpha_survival.models import (
     SklearnForecaster,
     ZeroForecast,
 )
+from alpha_survival.portfolio import WEIGHTINGS, long_short_returns, summarise
 from alpha_survival.walkforward import walk_forward_predict
 
 REPORT_PATH = Path("reports/baselines.md")
@@ -40,6 +41,18 @@ RAW_FEATURES = ["mom_12_1", "log_mcap", "bm", "rev_1m", "gp_a", "asset_growth", 
 FEATURES = [f"{c}_rank" for c in RAW_FEATURES]
 # Rolling window: train only on the latest 5 years, so old regimes are forgotten.
 ROLLING_WINDOW = 60
+# Direction each signal was PUBLISHED with (+1: high value -> high return). Single-
+# signal portfolios trade this sign, never the one our test period happened to show:
+# picking signs from the test results would be data snooping.
+PUBLISHED_SIGN = {
+    "mom_12_1": 1,  # Jegadeesh & Titman 1993
+    "log_mcap": -1,  # Banz 1981: small beats big
+    "bm": 1,  # Fama & French 1992
+    "rev_1m": -1,  # Jegadeesh 1990
+    "gp_a": 1,  # Novy-Marx 2013
+    "asset_growth": -1,  # Cooper, Gulen & Schill 2008
+    "vol_3m": -1,  # Ang, Hodrick, Xing & Zhang 2006
+}
 
 
 def baseline_models() -> list[Forecaster]:
@@ -77,15 +90,23 @@ def prepare(panel: pd.DataFrame) -> pd.DataFrame:
     return rank_normalise(panel, RAW_FEATURES)
 
 
-def evaluate(panel: pd.DataFrame, models: list[Forecaster], **split_kwargs) -> pd.DataFrame:
+def evaluate(
+    panel: pd.DataFrame,
+    models: list[Forecaster],
+    keep: dict[str, pd.DataFrame] | None = None,
+    **split_kwargs,
+) -> pd.DataFrame:
     """One row of out-of-sample scores per model.
 
     R^2 only for forecasts that are returns: a raw signal's scale is not a return.
     Rank IC only where forecasts differ across stocks: constant forecasts rank nothing.
+    If `keep` is given, each model's out-of-sample forecasts are stored in it by name.
     """
     rows = []
     for model in models:
         oos = walk_forward_predict(panel, model, **split_kwargs)
+        if keep is not None:
+            keep[model.name] = oos
         scored = oos.dropna(subset=["fwd_ret", "pred"])
         window = split_kwargs.get("window")
         row = {
@@ -174,11 +195,82 @@ def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
     )
 
 
-def run_all(panel: pd.DataFrame, **split_kwargs) -> pd.DataFrame:
-    """Every model with an expanding window, then the learning ones with a rolling one."""
-    expanding = evaluate(panel, baseline_models(), **split_kwargs)
+def run_all(
+    panel: pd.DataFrame, keep: dict[str, pd.DataFrame] | None = None, **split_kwargs
+) -> pd.DataFrame:
+    """Every model with an expanding window, then the learning ones with a rolling one.
+
+    `keep` collects the expanding-window forecasts by model name (for portfolios).
+    """
+    expanding = evaluate(panel, baseline_models(), keep=keep, **split_kwargs)
     rolling = evaluate(panel, rolling_models(), window=ROLLING_WINDOW, **split_kwargs)
     return pd.concat([expanding, rolling], ignore_index=True)
+
+
+def portfolio_table(oos_by_model: dict[str, pd.DataFrame], panel: pd.DataFrame) -> pd.DataFrame:
+    """Gross decile long-short performance for OLS and each signal, EW and VW.
+
+    Signals trade their published direction (`PUBLISHED_SIGN`); OLS's forecast already
+    carries the directions it learned in training. Value weights use market cap at
+    formation (month_end), known when the trade is placed.
+    """
+    caps = panel[["permaticker", "month_end", "market_cap"]]
+    candidates = [("ols", 1)] + [(f"signal_{c}", sign) for c, sign in PUBLISHED_SIGN.items()]
+    rows = []
+    for name, sign in candidates:
+        if name not in oos_by_model:
+            continue
+        oos = oos_by_model[name].merge(caps, on=["permaticker", "month_end"], how="left")
+        oos = oos.assign(pred=sign * oos["pred"])
+        direction = "learned" if name == "ols" else ("high" if sign > 0 else "low")
+        for weighting in WEIGHTINGS:
+            ls = long_short_returns(oos, weighting=weighting)
+            rows.append(
+                {
+                    "portfolio": name,
+                    "direction": direction,
+                    "weighting": weighting,
+                    **summarise(ls["long_short"]),
+                    "avg_stocks_per_leg": float(ls[["n_long", "n_short"]].mean().mean()),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def render_portfolios(table: pd.DataFrame) -> str:
+    digits = {
+        "ann_return": 4,
+        "ann_vol": 4,
+        "sharpe": 2,
+        "nw_t_stat": 2,
+        "max_drawdown": 3,
+        "hit_rate": 3,
+        "avg_stocks_per_leg": 0,
+    }
+    shown = table.assign(
+        **{c: table[c].map(lambda v, d=d: f"{v:.{d}f}") for c, d in digits.items()}
+    )
+    return "\n".join(
+        [
+            "## Decile long-short portfolios (GROSS of costs)",
+            "",
+            "**Real data, out-of-sample. No trading or borrowing costs yet: an upper bound, "
+            "not achievable returns.**",
+            "",
+            "- Each month: long the top 10% of stocks by forecast, short the bottom 10%, hold "
+            "one month. Return = long leg - short leg (the short funds the long).",
+            "- `direction`: signals trade the sign their original paper published (`high` = "
+            "buy high values), never the sign seen in our test period; `ols` uses the signs "
+            "it learned in each training window.",
+            "- `equal`: every stock the same weight; `value`: weighted by market cap at "
+            "formation. A big gap means the edge lives in small, costly-to-trade stocks.",
+            "- `ann_return` = 12 x mean monthly; `sharpe` = mean / std x sqrt(12); `nw_t_stat` "
+            "of the mean monthly return; `max_drawdown` of $1 compounded.",
+            "",
+            markdown_table(shown),
+            "",
+        ]
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -187,11 +279,15 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     panel = prepare(load_panel())
-    table = run_all(panel)
+    forecasts: dict[str, pd.DataFrame] = {}
+    table = run_all(panel, keep=forecasts)
     print(table.to_string(index=False))
+    portfolios = portfolio_table(forecasts, panel)
+    print(portfolios.to_string(index=False))
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(render_report(table, panel), encoding="utf-8")
+    report = render_report(table, panel) + "\n" + render_portfolios(portfolios)
+    args.out.write_text(report, encoding="utf-8")
     print(f"Report -> {args.out}")
 
 

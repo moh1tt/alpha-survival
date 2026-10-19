@@ -1,12 +1,16 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from alpha_survival.models import HistoricalMean
 from alpha_survival.run import (
+    PUBLISHED_SIGN,
     RAW_FEATURES,
     baseline_models,
     evaluate,
+    portfolio_table,
     prepare,
+    render_portfolios,
     render_report,
     run_all,
 )
@@ -115,3 +119,29 @@ def test_rolling_window_forgets_old_months():
     exp = evaluate(panel, [HistoricalMean()], min_train=12, test_size=4, step=4)
     roll = evaluate(panel, [HistoricalMean()], min_train=12, test_size=4, step=4, window=12)
     assert roll.loc[0, "oos_r2_pct"] > exp.loc[0, "oos_r2_pct"]
+
+
+def test_portfolio_table_covers_ols_and_every_signal_both_weightings():
+    panel = prepare(make_panel())
+    forecasts = {}
+    run_all(panel, keep=forecasts, min_train=12)
+    table = portfolio_table(forecasts, panel)
+    assert set(PUBLISHED_SIGN) == set(RAW_FEATURES)  # every feature has a published sign
+    assert set(table["portfolio"]) == {"ols"} | {f"signal_{c}" for c in RAW_FEATURES}
+    assert (table.groupby("portfolio")["weighting"].apply(set) == {"equal", "value"}).all()
+    assert table["sharpe"].notna().all()
+    assert "GROSS of costs" in render_portfolios(table)
+
+
+def test_signal_portfolios_trade_the_published_direction():
+    # A signal published as "low is good" must short its high values: flipping the
+    # forecast's sign must flip the long-short return exactly.
+    panel = prepare(make_panel())
+    forecasts = {}
+    run_all(panel, keep=forecasts, min_train=12)
+    vol = forecasts["signal_vol_3m"]
+    table = portfolio_table({"signal_vol_3m": vol}, panel).set_index("weighting")
+    flipped = portfolio_table({"signal_vol_3m": vol.assign(pred=-vol["pred"])}, panel)
+    flipped = flipped.set_index("weighting")
+    assert table.loc["equal", "direction"] == "low"
+    assert table.loc["equal", "ann_return"] == pytest.approx(-flipped.loc["equal", "ann_return"])

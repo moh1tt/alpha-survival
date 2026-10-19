@@ -24,3 +24,31 @@
 | ridge | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.128 | 0.0314 | 5.33 | 5.21 | 0.04 | 0.681 | 285 |
 | hist_mean | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.192 |  |  |  |  |  | 0 |
 | ols | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.325 | 0.0248 | 3.96 | 4.13 | 0.01 | 0.600 | 285 |
+
+## Decile long-short portfolios (GROSS of costs)
+
+**Real data, out-of-sample. No trading or borrowing costs yet: an upper bound, not achievable returns.**
+
+- Each month: long the top 10% of stocks by forecast, short the bottom 10%, hold one month. Return = long leg - short leg (the short funds the long).
+- `direction`: signals trade the sign their original paper published (`high` = buy high values), never the sign seen in our test period; `ols` uses the signs it learned in each training window.
+- `equal`: every stock the same weight; `value`: weighted by market cap at formation. A big gap means the edge lives in small, costly-to-trade stocks.
+- `ann_return` = 12 x mean monthly; `sharpe` = mean / std x sqrt(12); `nw_t_stat` of the mean monthly return; `max_drawdown` of $1 compounded.
+
+| portfolio | direction | weighting | ann_return | ann_vol | sharpe | nw_t_stat | max_drawdown | hit_rate | n_months | avg_stocks_per_leg |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ols | learned | equal | 0.1049 | 0.1484 | 0.71 | 3.11 | -0.448 | 0.642 | 285 | 369 |
+| ols | learned | value | 0.0488 | 0.1785 | 0.27 | 1.16 | -0.481 | 0.554 | 285 | 364 |
+| signal_mom_12_1 | high | equal | 0.0744 | 0.1838 | 0.40 | 1.90 | -0.658 | 0.625 | 285 | 343 |
+| signal_mom_12_1 | high | value | 0.1053 | 0.2664 | 0.40 | 2.00 | -0.596 | 0.596 | 285 | 336 |
+| signal_log_mcap | low | equal | -0.0621 | 0.1015 | -0.61 | -2.85 | -0.845 | 0.453 | 285 | 354 |
+| signal_log_mcap | low | value | -0.0502 | 0.1038 | -0.48 | -2.21 | -0.821 | 0.456 | 285 | 354 |
+| signal_bm | high | equal | 0.0262 | 0.1474 | 0.18 | 0.79 | -0.572 | 0.481 | 285 | 335 |
+| signal_bm | high | value | -0.0340 | 0.2170 | -0.16 | -0.67 | -0.914 | 0.495 | 285 | 335 |
+| signal_rev_1m | low | equal | 0.0334 | 0.1463 | 0.23 | 1.29 | -0.411 | 0.474 | 285 | 367 |
+| signal_rev_1m | low | value | -0.0367 | 0.2167 | -0.17 | -0.88 | -0.848 | 0.453 | 285 | 358 |
+| signal_gp_a | high | equal | 0.0826 | 0.0995 | 0.83 | 3.89 | -0.211 | 0.586 | 285 | 265 |
+| signal_gp_a | high | value | 0.0828 | 0.1242 | 0.67 | 2.73 | -0.330 | 0.589 | 285 | 265 |
+| signal_asset_growth | low | equal | 0.0079 | 0.0976 | 0.08 | 0.33 | -0.474 | 0.502 | 285 | 331 |
+| signal_asset_growth | low | value | -0.0093 | 0.1347 | -0.07 | -0.32 | -0.563 | 0.460 | 285 | 330 |
+| signal_vol_3m | low | equal | 0.0387 | 0.2372 | 0.16 | 0.77 | -0.648 | 0.533 | 285 | 362 |
+| signal_vol_3m | low | value | 0.0123 | 0.2972 | 0.04 | 0.20 | -0.838 | 0.516 | 285 | 338 |
