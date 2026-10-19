@@ -66,3 +66,21 @@ def test_momentum_duplicate_rows_raise():
     panel = pd.concat([panel_for(1, RETS), panel_for(1, RETS)])
     with pytest.raises(ValueError, match="duplicate"):
         features.add_momentum(panel)
+
+
+def test_size_is_log_market_cap():
+    panel = pd.DataFrame({"market_cap": [1e6, 1e9, np.e]})
+    out = features.add_size(panel)
+    assert list(out["log_mcap"]) == pytest.approx([np.log(1e6), np.log(1e9), 1.0])
+
+
+def test_size_is_nan_without_a_positive_market_cap():
+    out = features.add_size(pd.DataFrame({"market_cap": [np.nan, 0.0, -5.0]}))
+    assert out["log_mcap"].isna().all()
+
+
+def test_size_uses_only_its_own_month():
+    # Leakage test: changing other months' market caps leaves this month untouched.
+    base = features.add_size(pd.DataFrame({"market_cap": [1e8, 2e8, 3e8]}))
+    shocked = features.add_size(pd.DataFrame({"market_cap": [1e8, 2e8, 9e12]}))
+    assert list(shocked["log_mcap"].iloc[:2]) == list(base["log_mcap"].iloc[:2])

@@ -7,6 +7,7 @@ Never `fwd_ret` (the target) and never later rows.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 # 12-1 momentum compounds the monthly returns of t-11 .. t-1: from the close at
@@ -39,3 +40,14 @@ def add_momentum(panel: pd.DataFrame) -> pd.DataFrame:
     consecutive = oldest == panel["month_end"].dt.to_period("M") - MOMENTUM_MONTHS
 
     return panel.assign(mom_12_1=(growth - 1).where(consecutive))
+
+
+def add_size(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `log_mcap`: log of the month-end market cap (USD).
+
+    Small firms have historically earned higher returns (Banz 1981). The log puts
+    a $10M -> $100M step on par with $10B -> $100B, so megacaps don't dominate.
+    Uses only the row's own `market_cap`, known at month_end. NaN if it is missing.
+    """
+    market_cap = panel["market_cap"].where(panel["market_cap"] > 0)
+    return panel.assign(log_mcap=np.log(market_cap))
