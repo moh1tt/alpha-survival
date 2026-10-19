@@ -53,11 +53,39 @@ def rank_ic(oos: pd.DataFrame, min_stocks: int = 10) -> pd.Series:
     return pd.Series(ic, dtype=float, name="rank_ic").rename_axis("month_end")
 
 
-def ic_summary(ic: pd.Series) -> dict[str, float]:
-    """Mean, std, t-stat (mean / (std / sqrt(n))) and hit rate of a monthly IC series.
+def newey_west_lags(n: int) -> int:
+    """Rule-of-thumb lag count floor(4 * (n / 100) ** (2/9)) (Newey & West 1994)."""
+    return int(np.floor(4 * (n / 100) ** (2 / 9)))
 
-    The t-stat treats months as independent; overlapping or autocorrelated ICs would
-    need a Newey-West correction.
+
+def newey_west_t_stat(x: pd.Series, lags: int | None = None) -> float:
+    """t-stat of the mean of `x`, robust to autocorrelation (Newey & West 1987).
+
+    Same mean as the plain t-stat, but the variance adds the autocovariances up to
+    `lags` months, weighted 1 - j/(lags+1) (Bartlett) so it cannot go negative.
+    A persistent signal's ICs come in streaks: positively autocorrelated months
+    carry less independent evidence, and this t-stat shrinks accordingly.
+    """
+    x = np.asarray(pd.Series(x).dropna(), dtype=float)
+    n = len(x)
+    if n < 2:
+        raise ValueError("need at least 2 observations")
+    lags = newey_west_lags(n) if lags is None else lags
+    if not 0 <= lags < n:
+        raise ValueError(f"lags must be in [0, {n - 1}]")
+
+    e = x - x.mean()
+    variance = e @ e / n
+    for j in range(1, lags + 1):
+        variance += 2 * (1 - j / (lags + 1)) * (e[j:] @ e[:-j]) / n
+    return float(x.mean() / np.sqrt(variance / n)) if variance > 0 else float("nan")
+
+
+def ic_summary(ic: pd.Series) -> dict[str, float]:
+    """Mean, std, t-stats and hit rate of a monthly IC series.
+
+    `t_stat` = mean / (std / sqrt(n)) treats months as independent; `nw_t_stat`
+    allows for autocorrelation (Newey-West, `nw_lags` lags) and is the one to trust.
     """
     ic = ic.dropna()
     if len(ic) < 2:
@@ -67,6 +95,9 @@ def ic_summary(ic: pd.Series) -> dict[str, float]:
         "mean_ic": mean,
         "std_ic": std,
         "t_stat": mean / (std / np.sqrt(n)) if std > 0 else float("nan"),
+        "nw_t_stat": newey_west_t_stat(ic),
+        "nw_lags": newey_west_lags(n),
+        "ic_autocorr_1": float(ic.autocorr(1)) if n > 2 else float("nan"),
         "hit_rate": float((ic > 0).mean()),
         "n_months": n,
     }

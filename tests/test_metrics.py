@@ -2,7 +2,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from alpha_survival.metrics import ic_summary, oos_r2, rank_ic
+from alpha_survival.metrics import (
+    ic_summary,
+    newey_west_lags,
+    newey_west_t_stat,
+    oos_r2,
+    rank_ic,
+)
 from alpha_survival.models import TARGET
 
 
@@ -65,6 +71,7 @@ def test_ic_summary():
     assert s["mean_ic"] == pytest.approx(0.03)
     assert s["t_stat"] == pytest.approx(0.03 / (ic.std() / 2))
     assert s["hit_rate"] == 0.75 and s["n_months"] == 4
+    assert s["nw_lags"] == 1 and np.isfinite(s["nw_t_stat"])
     with pytest.raises(ValueError):
         ic_summary(pd.Series([0.1]))
 
@@ -72,3 +79,49 @@ def test_ic_summary():
 def test_empty_input_raises():
     with pytest.raises(ValueError, match="no rows"):
         oos_r2(make_oos([np.nan], [0.1]))
+
+
+def test_newey_west_lag_rule():
+    assert newey_west_lags(285) == 5
+    assert newey_west_lags(100) == 4
+
+
+def test_newey_west_with_zero_lags_is_the_plain_t_stat():
+    x = pd.Series([0.05, 0.03, -0.01, 0.05, 0.02])
+    # Lag 0 uses the population variance (divide by n), not the sample one.
+    assert newey_west_t_stat(x, lags=0) == pytest.approx(x.mean() / (x.std(ddof=0) / np.sqrt(5)))
+
+
+def test_newey_west_by_hand_with_one_lag():
+    x = np.array([1.0, 2.0, 3.0, 2.0])  # mean 2, deviations -1, 0, 1, 0
+    gamma0 = (1 + 0 + 1 + 0) / 4
+    gamma1 = (0 * -1 + 1 * 0 + 0 * 1) / 4
+    variance = gamma0 + 2 * 0.5 * gamma1
+    assert newey_west_t_stat(pd.Series(x), lags=1) == pytest.approx(2 / np.sqrt(variance / 4))
+
+
+def test_newey_west_shrinks_t_for_persistent_series():
+    # AR(1) with strong persistence: streaky, like the IC of a slow-moving signal.
+    rng = np.random.default_rng(0)
+    x = np.empty(300)
+    x[0] = 0.0
+    for t in range(1, 300):
+        x[t] = 0.8 * x[t - 1] + rng.normal(0, 0.02)
+    x = pd.Series(x + 0.01)
+    plain = x.mean() / (x.std() / np.sqrt(len(x)))
+    assert newey_west_t_stat(x) < 0.6 * plain
+
+
+def test_newey_west_bad_lags_raise():
+    with pytest.raises(ValueError):
+        newey_west_t_stat(pd.Series([0.1, 0.2, 0.3]), lags=3)
+
+
+def test_newey_west_matches_statsmodels():
+    sm = pytest.importorskip("statsmodels.api")
+    rng = np.random.default_rng(1)
+    x = rng.normal(0.02, 0.1, 120)
+    fit = sm.OLS(x, np.ones_like(x)).fit(
+        cov_type="HAC", cov_kwds={"maxlags": 4, "use_correction": False}
+    )
+    assert newey_west_t_stat(pd.Series(x), lags=4) == pytest.approx(fit.tvalues[0])

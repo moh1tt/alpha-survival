@@ -64,6 +64,8 @@ def evaluate(panel: pd.DataFrame, models: list[Forecaster], **split_kwargs) -> p
             "oos_r2_pct": float("nan"),
             "mean_ic": float("nan"),
             "ic_t_stat": float("nan"),
+            "ic_nw_t_stat": float("nan"),
+            "ic_autocorr_1": float("nan"),
             "ic_hit_rate": float("nan"),
             "ic_months": 0,
         }
@@ -75,6 +77,8 @@ def evaluate(panel: pd.DataFrame, models: list[Forecaster], **split_kwargs) -> p
             row |= {
                 "mean_ic": s["mean_ic"],
                 "ic_t_stat": s["t_stat"],
+                "ic_nw_t_stat": s["nw_t_stat"],
+                "ic_autocorr_1": s["ic_autocorr_1"],
                 "ic_hit_rate": s["hit_rate"],
                 "ic_months": s["n_months"],
             }
@@ -83,7 +87,14 @@ def evaluate(panel: pd.DataFrame, models: list[Forecaster], **split_kwargs) -> p
 
 
 def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
-    digits = {"oos_r2_pct": 3, "mean_ic": 4, "ic_t_stat": 2, "ic_hit_rate": 3}
+    digits = {
+        "oos_r2_pct": 3,
+        "mean_ic": 4,
+        "ic_t_stat": 2,
+        "ic_nw_t_stat": 2,
+        "ic_autocorr_1": 2,
+        "ic_hit_rate": 3,
+    }
     shown = table.assign(
         n_forecasts=table["n_forecasts"].map("{:,}".format),
         **{
@@ -108,7 +119,10 @@ def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
             "- `mean_ic`: average monthly Spearman rank correlation of forecast with next-month "
             "return; months with < 10 stocks skipped. Blank for constant forecasts. "
             "`signal_log_mcap` is log size, so a small-firm premium shows as a NEGATIVE IC.",
-            "- `ic_t_stat` treats months as independent (no Newey-West correction).",
+            "- `ic_t_stat` treats months as independent; `ic_nw_t_stat` corrects for "
+            "autocorrelated ICs (Newey & West 1987; lags floor(4 (n/100)^(2/9)), 5 for 285 "
+            "months) and is the one to trust. `ic_autocorr_1`: correlation of each month's "
+            "IC with the previous month's.",
             "",
             markdown_table(shown),
             "",
