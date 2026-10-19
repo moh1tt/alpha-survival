@@ -2,14 +2,21 @@ import numpy as np
 import pandas as pd
 
 from alpha_survival.models import HistoricalMean
-from alpha_survival.run import baseline_models, evaluate, prepare, render_report, run_all
+from alpha_survival.run import (
+    RAW_FEATURES,
+    baseline_models,
+    evaluate,
+    prepare,
+    render_report,
+    run_all,
+)
 
 N_STOCKS, N_MONTHS = 15, 40
 MONTHS = pd.date_range("2000-01-31", periods=N_MONTHS, freq="ME")
 
 
 def make_panel(seed: int = 0) -> pd.DataFrame:
-    """Toy panel like load_panel's output: ret, fwd_ret, market_cap, equityusd, investable."""
+    """Toy panel shaped like load_panel's output, with the columns the features need."""
     rng = np.random.default_rng(seed)
     panel = pd.DataFrame(
         [(s, m) for s in range(N_STOCKS) for m in MONTHS], columns=["permaticker", "month_end"]
@@ -18,6 +25,9 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["fwd_ret"] = panel.groupby("permaticker")["ret"].shift(-1)
     panel["market_cap"] = np.exp(rng.normal(20, 2, len(panel)))
     panel["equityusd"] = panel["market_cap"] * rng.uniform(-0.2, 1.5, len(panel))
+    panel["assets"] = panel["market_cap"] * rng.uniform(0.5, 3, len(panel))
+    panel["gp"] = panel["assets"] * rng.normal(0.2, 0.1, len(panel))
+    panel["cor"] = 1.0
     panel["investable"] = True
     return panel
 
@@ -44,6 +54,7 @@ def test_evaluate_scores_each_model_the_right_way():
         "signal_log_mcap",
         "signal_bm",
         "signal_rev_1m",
+        "signal_gp_a",
         "ols",
         "ridge",
     ]
@@ -52,18 +63,9 @@ def test_evaluate_scores_each_model_the_right_way():
     assert np.isfinite(table.loc["hist_mean", "oos_r2_pct"])
     # Constant forecasts have no rank IC; raw signals have no R^2.
     assert table.loc[["zero", "hist_mean"], "mean_ic"].isna().all()
-    assert (
-        table.loc[
-            ["signal_mom_12_1", "signal_log_mcap", "signal_bm", "signal_rev_1m"], "oos_r2_pct"
-        ]
-        .isna()
-        .all()
-    )
-    assert (
-        table.loc[["signal_mom_12_1", "signal_log_mcap", "signal_bm", "signal_rev_1m"], "ic_months"]
-        .gt(0)
-        .all()
-    )
+    signals = [f"signal_{c}" for c in RAW_FEATURES]
+    assert table.loc[signals, "oos_r2_pct"].isna().all()
+    assert table.loc[signals, "ic_months"].gt(0).all()
     # Learned models forecast returns AND order stocks: both metrics.
     assert table.loc[["ols", "ridge"], ["oos_r2_pct", "mean_ic"]].notna().all().all()
     assert (table["first_test_month"] == MONTHS[12].date()).all()
@@ -88,7 +90,12 @@ def test_prepare_ranks_among_investable_stocks_only():
     in_month = out[out["month_end"] == MONTHS[20]]
     assert in_month["log_mcap_rank"].max() == 1.0
     assert in_month["log_mcap_rank"].min() == -1.0
-    assert out[["mom_12_1_rank", "log_mcap_rank", "bm_rank", "rev_1m_rank"]].notna().all().all()
+    assert (
+        out[["mom_12_1_rank", "log_mcap_rank", "bm_rank", "rev_1m_rank", "gp_a_rank"]]
+        .notna()
+        .all()
+        .all()
+    )
 
 
 def test_run_all_adds_rolling_runs_with_the_same_test_period():

@@ -42,6 +42,22 @@ def add_momentum(panel: pd.DataFrame) -> pd.DataFrame:
     return panel.assign(mom_12_1=(growth - 1).where(consecutive))
 
 
+def add_profitability(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `gp_a`: gross profit (trailing twelve months) over total assets.
+
+    Firms that turn assets into more gross profit earn higher returns, especially
+    alongside value (Novy-Marx 2013). Both inputs come from the same filing, so
+    the currency cancels. NaN where cost of revenue (`cor`) is 0: there gross
+    profit is just revenue (banks, insurers), and revenue over a bank's balance
+    sheet would rank every bank least profitable. Decided from the filing itself,
+    so point-in-time, unlike today's sector label. NaN if assets <= 0 or inputs are
+    missing; negative gross profit is kept. Row's own columns only: no look-ahead.
+    """
+    gross_profit = panel["gp"].where(panel["cor"] != 0)
+    assets = panel["assets"].where(panel["assets"] > 0)
+    return panel.assign(gp_a=gross_profit / assets)
+
+
 def add_reversal(panel: pd.DataFrame) -> pd.DataFrame:
     """Add `rev_1m`: the stock's return over month t itself.
 

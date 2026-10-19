@@ -157,3 +157,23 @@ def test_add_reversal_is_this_months_return_never_the_target():
     # Leakage check: changing next month's return (fwd_ret) cannot move it.
     shocked = features.add_reversal(panel.assign(fwd_ret=panel["fwd_ret"] * 100))
     assert shocked["rev_1m"].equals(out["rev_1m"])
+
+
+def test_add_profitability_is_gross_profit_over_assets():
+    rows = pd.DataFrame(
+        {
+            "gp": [30.0, -5.0, 80.0, 10.0, np.nan],
+            "cor": [70.0, 20.0, 0.0, 5.0, 1.0],  # cor 0: a bank, gp is just revenue
+            "assets": [100.0, 50.0, 1000.0, 0.0, 10.0],
+        }
+    )
+    out = features.add_profitability(rows)
+    assert out["gp_a"].tolist()[:2] == [0.3, -0.1]  # negative gross profit is kept
+    assert out["gp_a"].iloc[2:].isna().all()  # no COGS, zero assets, missing gp
+
+
+def test_add_profitability_uses_only_the_row_itself():
+    rows = pd.DataFrame({"gp": [10.0, 20.0], "cor": [1.0, 1.0], "assets": [100.0, 100.0]})
+    changed = rows.assign(gp=[10.0, 1e9])
+    a = features.add_profitability(rows)["gp_a"].iloc[0]
+    assert a == features.add_profitability(changed)["gp_a"].iloc[0]
