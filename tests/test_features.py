@@ -84,3 +84,46 @@ def test_size_uses_only_its_own_month():
     base = features.add_size(pd.DataFrame({"market_cap": [1e8, 2e8, 3e8]}))
     shocked = features.add_size(pd.DataFrame({"market_cap": [1e8, 2e8, 9e12]}))
     assert list(shocked["log_mcap"].iloc[:2]) == list(base["log_mcap"].iloc[:2])
+
+
+def month_rows(month, values):
+    """One month's cross-section: stock i has feature value values[i]."""
+    return pd.DataFrame(
+        {"permaticker": range(len(values)), "month_end": pd.Timestamp(month), "x": values}
+    )
+
+
+def test_rank_normalise_spreads_each_month_over_minus_one_to_one():
+    out = features.rank_normalise(month_rows("2020-01-31", [10.0, -3.0, 500.0, 7.0, 0.0]), ["x"])
+    # Order -3 < 0 < 7 < 10 < 500 -> -1, -0.5, 0, 0.5, 1; the 500 outlier is just +1.
+    assert out["x_rank"].tolist() == [0.5, -1.0, 1.0, 0.0, -0.5]
+    assert out["x"].tolist() == [10.0, -3.0, 500.0, 7.0, 0.0]  # raw column kept
+
+
+def test_rank_normalise_ties_missing_and_single_values():
+    tied = features.rank_normalise(month_rows("2020-01-31", [1.0, 1.0, 2.0]), ["x"])
+    assert tied["x_rank"].tolist() == [-0.5, -0.5, 1.0]
+
+    gaps = features.rank_normalise(month_rows("2020-01-31", [1.0, np.nan, 3.0]), ["x"])
+    assert gaps["x_rank"].tolist() == [-1.0, 0.0, 1.0]  # missing -> the middle
+
+    single = features.rank_normalise(month_rows("2020-01-31", [np.nan, 4.0]), ["x"])
+    assert single["x_rank"].tolist() == [0.0, 0.0]  # one value has no order
+
+
+def test_rank_normalise_is_per_month_so_other_months_cannot_move_it():
+    jan = month_rows("2020-01-31", [1.0, 2.0, 3.0])
+    feb = month_rows("2020-02-29", [5.0, 4.0, 6.0])
+    feb_wild = month_rows("2020-02-29", [-100.0, 1e9, 0.0])
+    a = features.rank_normalise(pd.concat([jan, feb]), ["x"])
+    b = features.rank_normalise(pd.concat([jan, feb_wild]), ["x"])
+    jan_a = a[a["month_end"] == "2020-01-31"]["x_rank"]
+    jan_b = b[b["month_end"] == "2020-01-31"]["x_rank"]
+    assert jan_a.tolist() == jan_b.tolist() == [-1.0, 0.0, 1.0]
+
+
+def test_rank_normalise_several_columns_and_suffix():
+    rows = month_rows("2020-01-31", [1.0, 2.0, 3.0]).assign(y=[3.0, 2.0, 1.0])
+    out = features.rank_normalise(rows, ["x", "y"], suffix="_r")
+    assert out["x_r"].tolist() == [-1.0, 0.0, 1.0]
+    assert out["y_r"].tolist() == [1.0, 0.0, -1.0]

@@ -51,3 +51,23 @@ def add_size(panel: pd.DataFrame) -> pd.DataFrame:
     """
     market_cap = panel["market_cap"].where(panel["market_cap"] > 0)
     return panel.assign(log_mcap=np.log(market_cap))
+
+
+def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
+    """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
+
+    Smallest -> -1, largest -> +1, evenly spaced, ties averaged; missing -> 0 (the
+    cross-sectional middle), as do months with a single value. Outliers cannot
+    dominate and the scale is the same in every month, so a coefficient learned
+    on 2005 means the same in 2020 (Gu, Kelly & Xiu 2020). Uses only the rows of
+    the same month: no look-ahead. Apply it to the rows that will be modelled
+    (e.g. investable only), since the ranks depend on who else is in the month.
+    """
+    by_month = panel.groupby("month_end")
+    added = {}
+    for col in columns:
+        rank = by_month[col].rank(method="average")
+        count = by_month[col].transform("count")
+        spread = (2 * (rank - 1) / (count - 1) - 1).where(count > 1)
+        added[f"{col}{suffix}"] = spread.fillna(0.0)
+    return panel.assign(**added)
