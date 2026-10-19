@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 
-from alpha_survival.run import baseline_models, evaluate, prepare, render_report
+from alpha_survival.models import HistoricalMean
+from alpha_survival.run import baseline_models, evaluate, prepare, render_report, run_all
 
 N_STOCKS, N_MONTHS = 15, 40
 MONTHS = pd.date_range("2000-01-31", periods=N_MONTHS, freq="ME")
@@ -75,3 +76,22 @@ def test_prepare_ranks_among_investable_stocks_only():
     assert in_month["log_mcap_rank"].max() == 1.0
     assert in_month["log_mcap_rank"].min() == -1.0
     assert out[["mom_12_1_rank", "log_mcap_rank"]].notna().all().all()
+
+
+def test_run_all_adds_rolling_runs_with_the_same_test_period():
+    panel = prepare(make_panel())
+    table = run_all(panel, min_train=12)
+    rolling = table[table["window"] != "expanding"]
+    assert set(rolling["model"]) == {"hist_mean", "ols"}
+    assert (rolling["window"] == "rolling 60m").all()
+    assert table["first_test_month"].nunique() == 1  # like-for-like comparison
+
+
+def test_rolling_window_forgets_old_months():
+    # The target jumps from +5% to -5% halfway: a rolling mean adapts, an expanding one lags.
+    panel = prepare(make_panel())
+    late = panel["month_end"] >= MONTHS[20]
+    panel["fwd_ret"] = np.where(late, -0.05, 0.05)
+    exp = evaluate(panel, [HistoricalMean()], min_train=12, test_size=4, step=4)
+    roll = evaluate(panel, [HistoricalMean()], min_train=12, test_size=4, step=4, window=12)
+    assert roll.loc[0, "oos_r2_pct"] > exp.loc[0, "oos_r2_pct"]

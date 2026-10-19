@@ -29,6 +29,8 @@ from alpha_survival.walkforward import walk_forward_predict
 REPORT_PATH = Path("reports/baselines.md")
 RAW_FEATURES = ["mom_12_1", "log_mcap"]
 FEATURES = [f"{c}_rank" for c in RAW_FEATURES]
+# Rolling window: train only on the latest 5 years, so old regimes are forgotten.
+ROLLING_WINDOW = 60
 
 
 def baseline_models() -> list[Forecaster]:
@@ -40,6 +42,12 @@ def baseline_models() -> list[Forecaster]:
         SklearnForecaster(LinearRegression(), FEATURES, "ols"),
         SklearnForecaster(Ridge(alpha=1.0), FEATURES, "ridge"),
     ]
+
+
+def rolling_models() -> list[Forecaster]:
+    """Models rerun with a rolling window. Only ones that learn: a raw signal has no
+    training set to roll, and Ridge equals OLS with two features."""
+    return [HistoricalMean(), SklearnForecaster(LinearRegression(), FEATURES, "ols")]
 
 
 def prepare(panel: pd.DataFrame) -> pd.DataFrame:
@@ -64,8 +72,10 @@ def evaluate(panel: pd.DataFrame, models: list[Forecaster], **split_kwargs) -> p
     for model in models:
         oos = walk_forward_predict(panel, model, **split_kwargs)
         scored = oos.dropna(subset=["fwd_ret", "pred"])
+        window = split_kwargs.get("window")
         row = {
             "model": model.name,
+            "window": "expanding" if window is None else f"rolling {window}m",
             "first_test_month": oos["month_end"].min().date(),
             "last_test_month": oos["month_end"].max().date(),
             "n_forecasts": len(scored),
@@ -123,8 +133,10 @@ def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
             "- Models: `zero` and `hist_mean` (pooled training mean) baselines; raw signals "
             "`mom_12_1` (12-1 momentum) and `log_mcap` (log size); `ols` and `ridge` "
             "(alpha=1, untuned) on both features rank-normalised to [-1, 1] each month.",
-            "- Splits: expanding window, first 60 months train only, 12-month test blocks, "
-            "model refit at the start of each block, horizon 1, embargo 0.",
+            "- Splits: first 60 months train only, 12-month test blocks, model refit at the "
+            "start of each block, horizon 1, embargo 0. `window`: `expanding` trains on all "
+            f"months so far; `rolling {ROLLING_WINDOW}m` on the latest {ROLLING_WINDOW} only. "
+            "Both start testing in the same month.",
             "- `oos_r2_pct`: pooled R^2 vs. a zero forecast, in percent (Gu, Kelly & Xiu 2020). "
             "Blank for raw signals, whose scale is not a return.",
             "- `mean_ic`: average monthly Spearman rank correlation of forecast with next-month "
@@ -141,13 +153,20 @@ def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
     )
 
 
+def run_all(panel: pd.DataFrame, **split_kwargs) -> pd.DataFrame:
+    """Every model with an expanding window, then the learning ones with a rolling one."""
+    expanding = evaluate(panel, baseline_models(), **split_kwargs)
+    rolling = evaluate(panel, rolling_models(), window=ROLLING_WINDOW, **split_kwargs)
+    return pd.concat([expanding, rolling], ignore_index=True)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Score baseline forecasters on the real panel.")
     parser.add_argument("--out", type=Path, default=REPORT_PATH)
     args = parser.parse_args(argv)
 
     panel = prepare(load_panel())
-    table = evaluate(panel, baseline_models())
+    table = run_all(panel)
     print(table.to_string(index=False))
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
