@@ -1,12 +1,14 @@
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.linear_model import LinearRegression, Ridge
 
 from alpha_survival.models import (
     TARGET,
     Forecaster,
     HistoricalMean,
     SignalForecast,
+    SklearnForecaster,
     ZeroForecast,
 )
 
@@ -95,3 +97,45 @@ def test_wrong_length_output_is_rejected():
 
     with pytest.raises(ValueError, match="returned 3 forecasts for 2 rows"):
         Broken().predict(features(make_rows([0.0, 0.0])))
+
+
+def linear_rows(n: int = 200, seed: int = 0) -> pd.DataFrame:
+    """fwd_ret = 0.01 + 0.02 * a - 0.03 * b exactly, plus an unused column."""
+    rng = np.random.default_rng(seed)
+    rows = pd.DataFrame({"a": rng.uniform(-1, 1, n), "b": rng.uniform(-1, 1, n)})
+    rows["unused"] = rng.normal(size=n)
+    rows[TARGET] = 0.01 + 0.02 * rows["a"] - 0.03 * rows["b"]
+    return rows
+
+
+def test_sklearn_forecaster_learns_and_predicts_from_listed_features():
+    train = linear_rows()
+    model = SklearnForecaster(LinearRegression(), ["a", "b"], "ols").fit(train)
+    assert model.estimator_.coef_ == pytest.approx([0.02, -0.03])
+    assert model.estimator_.intercept_ == pytest.approx(0.01)
+
+    test = features(linear_rows(seed=1))
+    pred = model.predict(test)
+    assert pred.name == "ols"
+    assert np.allclose(pred, 0.01 + 0.02 * test["a"] - 0.03 * test["b"])
+    # Columns not listed cannot change the forecast.
+    assert pred.equals(model.predict(test.assign(unused=1e9)))
+
+
+def test_sklearn_forecaster_clones_the_estimator():
+    estimator = Ridge(alpha=1.0)
+    model = SklearnForecaster(estimator, ["a", "b"], "ridge").fit(linear_rows())
+    assert model.estimator_ is not estimator
+    assert not hasattr(estimator, "coef_")  # the template stays unfitted
+
+
+def test_sklearn_forecaster_rejects_missing_or_nan_features():
+    model = SklearnForecaster(LinearRegression(), ["a", "b"], "ols")
+    with pytest.raises(RuntimeError, match="fit before predict"):
+        model.predict(features(linear_rows()))
+    gappy = linear_rows()
+    gappy.loc[3, "a"] = np.nan
+    with pytest.raises(ValueError, match="NaN"):
+        model.fit(gappy)
+    with pytest.raises(KeyError, match="'b'"):
+        model.fit(linear_rows().drop(columns="b"))

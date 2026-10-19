@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from sklearn.base import RegressorMixin, clone
 
 TARGET = "fwd_ret"
 
@@ -86,3 +87,36 @@ class SignalForecast(Forecaster):
         if self.column not in rows.columns:
             raise KeyError(f"signal column '{self.column}' not in rows")
         return rows[self.column]
+
+
+class SklearnForecaster(Forecaster):
+    """Any scikit-learn regressor, trained on a fixed list of feature columns.
+
+    Each `fit` trains a fresh clone, so the estimator passed in is never changed.
+    Features must have no missing values: rank-normalised features fill gaps with 0,
+    and silently dropping rows would make models forecast different stock sets.
+    """
+
+    def __init__(self, estimator: RegressorMixin, features: list[str], name: str) -> None:
+        self.estimator = estimator
+        self.features = list(features)
+        self.name = name
+        self.estimator_: RegressorMixin | None = None
+
+    def _matrix(self, rows: pd.DataFrame) -> np.ndarray:
+        missing = [c for c in self.features if c not in rows.columns]
+        if missing:
+            raise KeyError(f"{self.name}: feature columns {missing} not in rows")
+        x = rows[self.features].to_numpy(dtype=float)
+        if np.isnan(x).any():
+            raise ValueError(f"{self.name}: features contain NaN; rank-normalise them first")
+        return x
+
+    def fit(self, train: pd.DataFrame) -> SklearnForecaster:
+        self.estimator_ = clone(self.estimator).fit(self._matrix(train), train[TARGET])
+        return self
+
+    def _predict(self, rows: pd.DataFrame) -> np.ndarray:
+        if self.estimator_ is None:
+            raise RuntimeError(f"{self.name} must be fit before predict")
+        return self.estimator_.predict(self._matrix(rows))

@@ -11,20 +11,24 @@ import argparse
 from pathlib import Path
 
 import pandas as pd
+from sklearn.linear_model import LinearRegression, Ridge
 
 from alpha_survival.data.quality import markdown_table
 from alpha_survival.data.real import load_panel
-from alpha_survival.features import add_momentum, add_size
+from alpha_survival.features import add_momentum, add_size, rank_normalise
 from alpha_survival.metrics import ic_summary, oos_r2, rank_ic
 from alpha_survival.models import (
     Forecaster,
     HistoricalMean,
     SignalForecast,
+    SklearnForecaster,
     ZeroForecast,
 )
 from alpha_survival.walkforward import walk_forward_predict
 
 REPORT_PATH = Path("reports/baselines.md")
+RAW_FEATURES = ["mom_12_1", "log_mcap"]
+FEATURES = [f"{c}_rank" for c in RAW_FEATURES]
 
 
 def baseline_models() -> list[Forecaster]:
@@ -33,17 +37,21 @@ def baseline_models() -> list[Forecaster]:
         HistoricalMean(),
         SignalForecast("mom_12_1"),
         SignalForecast("log_mcap"),
+        SklearnForecaster(LinearRegression(), FEATURES, "ols"),
+        SklearnForecaster(Ridge(alpha=1.0), FEATURES, "ridge"),
     ]
 
 
 def prepare(panel: pd.DataFrame) -> pd.DataFrame:
-    """Add features on the full panel, then keep the rows that may be bought.
+    """Add features on the full panel, keep the rows that may be bought, rank them.
 
     Order matters: momentum needs a stock's history from months it was below the
-    price cut, so features come first and the investable filter second.
+    price cut, so features come first and the investable filter second. Ranks come
+    last, so each stock is ranked among the stocks that could actually be bought.
     """
     panel = add_size(add_momentum(panel))
-    return panel[panel["investable"]].reset_index(drop=True)
+    panel = panel[panel["investable"]].reset_index(drop=True)
+    return rank_normalise(panel, RAW_FEATURES)
 
 
 def evaluate(panel: pd.DataFrame, models: list[Forecaster], **split_kwargs) -> pd.DataFrame:
@@ -104,14 +112,17 @@ def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
     )
     return "\n".join(
         [
-            "# Baseline forecasts: out-of-sample scores",
+            "# Forecasts: out-of-sample scores",
             "",
             "**Real data (Sharadar US equities), out-of-sample, walk-forward. "
-            "Baselines only; no transaction costs; not a trading result.**",
+            "No transaction costs; not a trading result.**",
             "",
             f"- Panel: investable rows (price >= $5 at month end), "
             f"{panel['month_end'].min():%Y-%m} to {panel['month_end'].max():%Y-%m}, "
             f"{len(panel):,} stock-months, {panel['permaticker'].nunique():,} stocks.",
+            "- Models: `zero` and `hist_mean` (pooled training mean) baselines; raw signals "
+            "`mom_12_1` (12-1 momentum) and `log_mcap` (log size); `ols` and `ridge` "
+            "(alpha=1, untuned) on both features rank-normalised to [-1, 1] each month.",
             "- Splits: expanding window, first 60 months train only, 12-month test blocks, "
             "model refit at the start of each block, horizon 1, embargo 0.",
             "- `oos_r2_pct`: pooled R^2 vs. a zero forecast, in percent (Gu, Kelly & Xiu 2020). "

@@ -35,7 +35,14 @@ def test_prepare_computes_features_before_dropping_uninvestable_rows():
 def test_evaluate_scores_each_model_the_right_way():
     table = evaluate(prepare(make_panel()), baseline_models(), min_train=12)
     table = table.set_index("model")
-    assert list(table.index) == ["zero", "hist_mean", "signal_mom_12_1", "signal_log_mcap"]
+    assert list(table.index) == [
+        "zero",
+        "hist_mean",
+        "signal_mom_12_1",
+        "signal_log_mcap",
+        "ols",
+        "ridge",
+    ]
 
     assert table.loc["zero", "oos_r2_pct"] == 0.0  # the benchmark scores exactly 0
     assert np.isfinite(table.loc["hist_mean", "oos_r2_pct"])
@@ -43,11 +50,28 @@ def test_evaluate_scores_each_model_the_right_way():
     assert table.loc[["zero", "hist_mean"], "mean_ic"].isna().all()
     assert table.loc[["signal_mom_12_1", "signal_log_mcap"], "oos_r2_pct"].isna().all()
     assert table.loc[["signal_mom_12_1", "signal_log_mcap"], "ic_months"].gt(0).all()
+    # Learned models forecast returns AND order stocks: both metrics.
+    assert table.loc[["ols", "ridge"], ["oos_r2_pct", "mean_ic"]].notna().all().all()
     assert (table["first_test_month"] == MONTHS[12].date()).all()
 
 
 def test_report_labels_the_results_honestly():
     panel = prepare(make_panel())
     text = render_report(evaluate(panel, baseline_models(), min_train=12), panel)
-    assert "Real data" in text and "out-of-sample" in text and "no transaction costs" in text
+    lowered = text.lower()
+    assert "real data" in lowered and "out-of-sample" in lowered
+    assert "no transaction costs" in lowered
     assert "| signal_mom_12_1 |" in text
+
+
+def test_prepare_ranks_among_investable_stocks_only():
+    panel = make_panel()
+    month = panel["month_end"] == MONTHS[20]
+    # Make the biggest stock that month uninvestable: the next biggest must rank +1.
+    biggest = panel.loc[month, "market_cap"].idxmax()
+    panel.loc[biggest, "investable"] = False
+    out = prepare(panel)
+    in_month = out[out["month_end"] == MONTHS[20]]
+    assert in_month["log_mcap_rank"].max() == 1.0
+    assert in_month["log_mcap_rank"].min() == -1.0
+    assert out[["mom_12_1_rank", "log_mcap_rank"]].notna().all().all()
