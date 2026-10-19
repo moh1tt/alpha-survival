@@ -95,11 +95,13 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     rewrites its past levels every time a dividend is paid, so a historical
     level is not what anyone could have seen on that date (look-ahead).
 
-    Columns: permaticker, month_end, ret, last_trade_date, close_unadj.
+    Columns: permaticker, month_end, ret, last_trade_date, close_unadj, close_split_adj.
     `last_trade_date` lets later steps spot stale prices (no trade near month end).
     `close_unadj` is the last close as actually traded (no split adjustment), the
     price an investor saw at month end; `close` is split-adjusted backwards, so a
-    later reverse split would inflate it (look-ahead).
+    later reverse split would inflate it (look-ahead). `close_split_adj` is that
+    `close`, kept only to multiply with SF1 share counts, which Sharadar restates
+    for the same splits (see `add_market_cap`); never use it alone.
     """
     if stocks.duplicated(["ticker", "date"]).any():
         raise ValueError("stocks has duplicate (ticker, date) rows")
@@ -111,7 +113,7 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     if unmapped:
         raise ValueError(f"stocks tickers missing from security master: {sorted(unmapped)[:10]}")
 
-    daily = stocks[["ticker", "date", "closeadj", "closeunadj"]].assign(
+    daily = stocks[["ticker", "date", "closeadj", "close", "closeunadj"]].assign(
         permaticker=lambda d: d["ticker"].map(ids),
         month=lambda d: d["date"].dt.to_period("M"),
     )
@@ -121,7 +123,13 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     monthly = (
         daily.groupby(["permaticker", "month"], as_index=False)
         .last()
-        .rename(columns={"date": "last_trade_date", "closeunadj": "close_unadj"})
+        .rename(
+            columns={
+                "date": "last_trade_date",
+                "closeunadj": "close_unadj",
+                "close": "close_split_adj",
+            }
+        )
     )
 
     by_stock = monthly.groupby("permaticker")
@@ -135,7 +143,7 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     monthly.loc[gap, "ret"] = float("nan")
 
     monthly["month_end"] = monthly["month"].dt.to_timestamp(how="end").dt.normalize()
-    cols = ["permaticker", "month_end", "ret", "last_trade_date", "close_unadj"]
+    cols = ["permaticker", "month_end", "ret", "last_trade_date", "close_unadj", "close_split_adj"]
     return monthly[cols].reset_index(drop=True)
 
 
@@ -233,7 +241,7 @@ def load_monthly_returns(
     # Read only what returns need: the full table is ~45M rows.
     stocks = pd.read_parquet(
         raw_dir / "stocks.parquet",
-        columns=["ticker", "date", "closeadj", "closeunadj"],
+        columns=["ticker", "date", "closeadj", "close", "closeunadj"],
         filters=[("ticker", "in", list(universe["ticker"]))],
     )
     monthly = build_monthly_returns(stocks, master)
@@ -400,6 +408,25 @@ def flag_investable(panel: pd.DataFrame, min_price: float = MIN_PRICE) -> pd.Dat
     return panel.assign(investable=panel["close_unadj"] >= min_price)
 
 
+def add_market_cap(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `market_cap` (USD): what the stock's shares were worth at month end.
+
+    = close_split_adj x sharesbas x sharefactor, from the latest filing's
+    cover-page share count (`sharefactor` converts e.g. depositary shares; SF1's
+    own `marketcap` is built the same way). Sharadar restates SF1 share counts for
+    every split up to today (checked: across 8,565 splits, filed counts jump at
+    the split in 29 cases) and `close_split_adj` is scaled by the same splits, so
+    those cancel in the product. What remains is the traded price times the filed
+    count times the splits between filing and month_end: no look-ahead, and a
+    split after the filing is not missed. Never multiply the restated count by
+    `close_unadj`: that counts every later split twice.
+
+    NaN when there are no fundamentals, or the filing reports zero shares.
+    """
+    shares = (panel["sharesbas"] * panel["sharefactor"]).where(panel["sharesbas"] > 0)
+    return panel.assign(market_cap=panel["close_split_adj"] * shares)
+
+
 def load_panel(
     raw_dir: Path = RAW_DIR,
     as_of: pd.Timestamp | None = None,
@@ -410,4 +437,5 @@ def load_panel(
     """Read everything from disk and build the monthly modelling panel."""
     monthly = load_monthly_returns(raw_dir, as_of, penalise_unexplained)
     panel = build_panel(monthly, load_fundamentals(monthly, raw_dir, dimension))
+    panel = add_market_cap(panel)
     return flag_investable(panel, min_price)

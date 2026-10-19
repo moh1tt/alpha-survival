@@ -558,3 +558,48 @@ def test_only_the_target_sees_the_next_month():
     features = [c for c in base.columns if c != "fwd_ret"]
     pd.testing.assert_series_equal(base.loc[2, features], shocked.loc[2, features])
     assert base.loc[2, "fwd_ret"] != shocked.loc[2, "fwd_ret"]
+
+
+def test_monthly_returns_keep_split_adjusted_close_for_market_cap():
+    stocks = price_rows(
+        "AAA", ["2024-02-29", "2024-03-28"], [5.0, 5.5], close=[5.0, 5.5], closeunadj=[0.5, 5.5]
+    )
+    out = real.build_monthly_returns(stocks, master_for("AAA"))
+    assert list(out["close_split_adj"]) == [5.0, 5.5]
+
+
+def cap_panel(close_split_adj, sharesbas, sharefactor=1.0):
+    n = len(close_split_adj)
+    return pd.DataFrame(
+        {
+            "close_split_adj": close_split_adj,
+            "sharesbas": sharesbas if isinstance(sharesbas, list) else [sharesbas] * n,
+            "sharefactor": [sharefactor] * n,
+        }
+    )
+
+
+def test_market_cap_is_price_times_filed_shares_times_sharefactor():
+    out = real.add_market_cap(cap_panel([10.0, 12.0], 1_000.0, sharefactor=0.5))
+    assert list(out["market_cap"]) == [5_000.0, 6_000.0]
+
+
+def test_split_after_filing_is_handled_by_restated_data():
+    # Filed in January with 1,000 shares at $10; 2-for-1 split in February, after
+    # which the stock trades at $5. Sharadar today shows the split-adjusted close
+    # (Jan $5, Feb $5) and the restated count (2,000): $10,000 in both months.
+    out = real.add_market_cap(cap_panel([5.0, 5.0], 2_000.0))
+    assert list(out["market_cap"]) == [10_000.0, 10_000.0]
+
+
+def test_market_cap_does_not_change_when_a_later_split_restates_history():
+    # Leakage test: a split after month_end rescales the stored close by 1/k and the
+    # stored share count by k. The market cap at month_end must not move.
+    before = real.add_market_cap(cap_panel([10.0, 12.0], 1_000.0))
+    after = real.add_market_cap(cap_panel([10.0 / 7, 12.0 / 7], 7_000.0))
+    assert list(after["market_cap"]) == pytest.approx(list(before["market_cap"]))
+
+
+def test_market_cap_is_nan_without_shares():
+    out = real.add_market_cap(cap_panel([10.0, 10.0, 10.0], [float("nan"), 0.0, 1_000.0]))
+    assert out["market_cap"].isna().tolist() == [True, True, False]
