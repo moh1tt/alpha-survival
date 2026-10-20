@@ -91,18 +91,17 @@ def long_short_returns(
     return out[["long", "short", "long_short", "n_long", "n_short"]]
 
 
-def turnover(weights: pd.DataFrame) -> pd.Series:
-    """Dollars traded each month per $1 long (and $1 short), both legs together.
+def trades(weights: pd.DataFrame) -> pd.DataFrame:
+    """Dollars traded per stock at each formation date: month_end, permaticker, traded.
 
     `weights` is the output of `leg_weights`. Over a month each holding drifts
     with its own return: weight w_i becomes w_i (1 + r_i) / (1 + R_leg). At the
     next formation date we trade from those drifted weights to the new targets,
-    so turnover_t = sum_i |target_i,t - drifted_i,t| over long and short legs
-    (short weights negative). Selling a name and buying a replacement both count.
+    so traded_i,t = |target_i,t - drifted_i,t| (short weights negative). A stock
+    leaving the portfolio appears with its sale; one entering, with its purchase.
 
-    The first month buys both legs from cash (turnover 2); a strategy that keeps
-    identical names and weights through flat returns trades nothing. Each leg is
-    reset to $1 each month: the cash from that reset is not counted as trading.
+    The first month buys both legs from cash. Each leg is reset to $1 each month:
+    the cash from that reset is not counted as trading.
     """
     w = weights.assign(signed=weights["leg"] * weights["weight"])
     leg_ret = (w["weight"] * w[TARGET]).groupby([w["month_end"], w["leg"]]).transform("sum")
@@ -111,27 +110,54 @@ def turnover(weights: pd.DataFrame) -> pd.Series:
     months = np.sort(w["month_end"].unique())
     next_month = dict(zip(months[:-1], months[1:], strict=True))
     held = w.assign(month_end=w["month_end"].map(next_month)).dropna(subset=["month_end"])
-    trades = w[["month_end", "permaticker", "signed"]].merge(
+    out = w[["month_end", "permaticker", "signed"]].merge(
         held[["month_end", "permaticker", "drifted"]],
         on=["month_end", "permaticker"],
         how="outer",
     )
-    traded = (trades["signed"].fillna(0) - trades["drifted"].fillna(0)).abs()
-    return traded.groupby(trades["month_end"]).sum().reindex(months).rename("turnover")
+    traded = (out["signed"].fillna(0) - out["drifted"].fillna(0)).abs()
+    return out[["month_end", "permaticker"]].assign(traded=traded)
 
 
-def net_returns(
-    long_short: pd.Series, turnover: pd.Series, cost_bps: float, borrow_bps_pa: float
-) -> pd.Series:
+def turnover(weights: pd.DataFrame) -> pd.Series:
+    """Dollars traded each month per $1 long (and $1 short), both legs together.
+
+    Sum of `trades` per month: 2 when both legs are bought from cash or fully
+    replaced; 0 for identical names and weights through flat returns.
+    """
+    t = trades(weights)
+    return t.groupby("month_end")["traded"].sum().rename("turnover")
+
+
+def trading_costs(trade_rows: pd.DataFrame, cost_bps: float | pd.Series) -> pd.Series:
+    """Monthly trading cost as a fraction of $1 per leg: sum_i traded_i x cost_i.
+
+    `trade_rows` is the output of `trades`. `cost_bps` (basis points, 1 bp = 0.01%,
+    per dollar traded) is one flat number, or a Series indexed by (permaticker,
+    month_end) giving each stock's cost at that date. A trade with no cost on
+    record (e.g. selling a stock that has left the universe) pays the highest
+    cost seen that month: such exits are usually illiquid, so this errs high.
+    """
+    if isinstance(cost_bps, pd.Series):
+        key = pd.MultiIndex.from_frame(trade_rows[["permaticker", "month_end"]])
+        cost = pd.Series(cost_bps.reindex(key).to_numpy(), index=trade_rows.index)
+        worst = cost.groupby(trade_rows["month_end"]).transform("max")
+        cost = cost.fillna(worst)
+    else:
+        cost = cost_bps
+    paid = trade_rows["traded"] * cost / 1e4
+    return paid.groupby(trade_rows["month_end"]).sum().rename("trading_cost")
+
+
+def net_returns(long_short: pd.Series, trading_cost: pd.Series, borrow_bps_pa: float) -> pd.Series:
     """Long-short returns after trading and short-borrow costs.
 
-    Each month pays `cost_bps` (basis points, 1 bp = 0.01%) per dollar traded at
-    formation, times that month's `turnover`, plus 1/12 of the annual fee for
-    borrowing the $1 of shorted stock. Both series are indexed by formation
-    month: the trade at month_end t buys the return earned over t+1.
+    Each month pays its `trading_cost` (from `trading_costs`) at formation plus
+    1/12 of the annual fee for borrowing the $1 of shorted stock. Both series are
+    indexed by formation month: the trade at month_end t buys the return earned
+    over t+1.
     """
-    trading = cost_bps / 1e4 * turnover.reindex(long_short.index)
-    return long_short - trading - borrow_bps_pa / 1e4 / 12
+    return long_short - trading_cost.reindex(long_short.index) - borrow_bps_pa / 1e4 / 12
 
 
 def breakeven_cost_bps(long_short: pd.Series, turnover: pd.Series, borrow_bps_pa: float) -> float:

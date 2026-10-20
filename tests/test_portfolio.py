@@ -11,6 +11,8 @@ from alpha_survival.portfolio import (
     max_drawdown,
     net_returns,
     summarise,
+    trades,
+    trading_costs,
     turnover,
 )
 
@@ -142,21 +144,57 @@ def test_turnover_ignores_later_months():
     assert a.iloc[:2].tolist() == pytest.approx(b.iloc[:2].tolist())
 
 
+def two_months_of_trades():
+    # Jan: buy A (long) and B (short) from cash. Feb: sell A, buy C; B unchanged.
+    jan = stocks_oos("2020-01-31", ["A", "B"], [2.0, 1.0], [0.0, 0.0])
+    feb = stocks_oos("2020-02-29", ["C", "B", "A"], [2.0, 1.0, 1.5], [0.0] * 3)
+    return trades(leg_weights(pd.concat([jan, feb]), n_groups=2))
+
+
+def test_trades_are_per_stock_and_sum_to_turnover():
+    t = two_months_of_trades().set_index(["month_end", "permaticker"])["traded"]
+    assert t.loc[("2020-01-31", "A")] == 1.0 and t.loc[("2020-01-31", "B")] == 1.0
+    assert t.loc[("2020-02-29", "A")] == 1.0 and t.loc[("2020-02-29", "C")] == 1.0
+    assert t.loc[("2020-02-29", "B")] == 0.0
+
+
+def test_flat_trading_cost_is_cost_times_turnover():
+    costs = trading_costs(two_months_of_trades(), 20)
+    assert costs.tolist() == pytest.approx([2 * 0.0020, 2 * 0.0020])
+
+
+def test_per_stock_trading_cost_by_hand():
+    idx = pd.MultiIndex.from_tuples(
+        [
+            ("A", pd.Timestamp("2020-01-31")),
+            ("B", pd.Timestamp("2020-01-31")),
+            ("B", pd.Timestamp("2020-02-29")),
+            ("C", pd.Timestamp("2020-02-29")),
+        ],
+        names=["permaticker", "month_end"],
+    )
+    cost_bps = pd.Series([10.0, 40.0, 40.0, 30.0], index=idx)
+    costs = trading_costs(two_months_of_trades(), cost_bps)
+    # Jan: $1 of A at 10 bp + $1 of B at 40 bp. Feb: buy C at 30 bp; selling A has
+    # no Feb cost on record, so it pays that month's worst (40 bp).
+    assert costs.tolist() == pytest.approx([0.0050, 0.0070])
+
+
 def test_net_returns_by_hand():
     months = pd.to_datetime(["2020-01-31", "2020-02-29"])
     gross = pd.Series([0.02, 0.01], index=months)
-    to = pd.Series([2.0, 0.5], index=months)
-    # 20 bps x turnover, plus 60 bps / 12 = 5 bps borrow each month.
-    net = net_returns(gross, to, cost_bps=20, borrow_bps_pa=60)
+    cost = pd.Series([0.0040, 0.0010], index=months)
+    # Trading cost, plus 60 bps / 12 = 5 bps borrow each month.
+    net = net_returns(gross, cost, borrow_bps_pa=60)
     assert net.tolist() == pytest.approx([0.02 - 0.0040 - 0.0005, 0.01 - 0.0010 - 0.0005])
-    assert net_returns(gross, to, 0, 0).equals(gross)
+    assert net_returns(gross, cost * 0, 0).equals(gross)
 
 
-def test_net_returns_charge_each_month_its_own_turnover():
-    # Turnover for a month the long-short series lacks is ignored, not shifted.
+def test_net_returns_charge_each_month_its_own_cost():
+    # Cost for a month the long-short series lacks is ignored, not shifted.
     gross = pd.Series([0.01], index=pd.to_datetime(["2020-02-29"]))
-    to = pd.Series([2.0, 0.0], index=pd.to_datetime(["2020-01-31", "2020-02-29"]))
-    assert net_returns(gross, to, 50, 0).iloc[0] == pytest.approx(0.01)
+    cost = pd.Series([0.01, 0.0], index=pd.to_datetime(["2020-01-31", "2020-02-29"]))
+    assert net_returns(gross, cost, 0).iloc[0] == pytest.approx(0.01)
 
 
 def test_breakeven_cost_by_hand():
@@ -166,7 +204,7 @@ def test_breakeven_cost_by_hand():
     # (0.015 - 0.0005) / 1.5 = 0.00967 -> 96.7 bps; net mean there is exactly zero.
     b = breakeven_cost_bps(gross, to, borrow_bps_pa=60)
     assert b == pytest.approx(96.6667, abs=1e-3)
-    assert net_returns(gross, to, b, 60).mean() == pytest.approx(0.0, abs=1e-12)
+    assert net_returns(gross, b / 1e4 * to, 60).mean() == pytest.approx(0.0, abs=1e-12)
     assert np.isnan(breakeven_cost_bps(gross, to * 0, 60))
 
 

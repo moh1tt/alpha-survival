@@ -40,6 +40,8 @@ from alpha_survival.portfolio import (
     long_short_returns,
     net_returns,
     summarise,
+    trades,
+    trading_costs,
     turnover,
 )
 from alpha_survival.walkforward import walk_forward_predict
@@ -242,10 +244,11 @@ def portfolio_table(oos_by_model: dict[str, pd.DataFrame], panel: pd.DataFrame) 
         for weighting in WEIGHTINGS:
             ls = long_short_returns(oos, weighting=weighting)
             gross = ls["long_short"]
-            to = turnover(leg_weights(oos, weighting=weighting))
+            weights = leg_weights(oos, weighting=weighting)
+            trade_rows, to = trades(weights), turnover(weights)
             net = {}
             for c in COST_BPS:
-                net_ret = net_returns(gross, to, c, BORROW_BPS_PA)
+                net_ret = net_returns(gross, trading_costs(trade_rows, c), BORROW_BPS_PA)
                 net[f"sharpe_net_{c}bps"] = summarise(net_ret)["sharpe"]
             rows.append(
                 {
