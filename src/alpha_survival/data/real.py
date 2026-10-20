@@ -9,6 +9,7 @@ from __future__ import annotations
 import warnings
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from alpha_survival.data.sharadar import RAW_DIR
@@ -86,6 +87,40 @@ def select_universe(master: pd.DataFrame) -> pd.DataFrame:
     return master[keep].reset_index(drop=True)
 
 
+def abdi_ranaldo_product(daily: pd.DataFrame) -> pd.Series:
+    """One day-pair's term of the Abdi & Ranaldo (2017) bid-ask spread estimator.
+
+    The close usually trades at the bid or the ask, while the mid-range
+    eta = (log high + log low) / 2 sits near the true price. So how far the close
+    sits from today's and tomorrow's mid-range reveals the spread:
+
+        S^2 = 4 E[(c_t - eta_t)(c_t - eta_t+1)]       (c = log close)
+
+    This returns (c_t - eta_t)(c_t - eta_t+1) for each pair of adjacent trading
+    days, filed under the later day t+1, so it uses no price after that day.
+    Average it over many pairs, then S = sqrt(max(4 x mean, 0)); one pair alone is
+    mostly noise and often negative.
+
+    Pairs touching a no-trade day (zero volume, or high == low: the vendor just
+    repeats the close) are NaN: they would read as "zero spread" and make thinly
+    traded stocks look cheap. Corwin & Schultz (2012) was tried first and rejected
+    on this data for exactly that reason, and for an upward bias in liquid stocks.
+
+    `daily`: permaticker, high, low, close, volume, sorted by permaticker then date.
+    Split-adjusted prices are fine: only log differences within two adjacent days
+    are used, which later restatements cannot change.
+    """
+    traded = (daily["volume"] > 0) & (daily["high"] > daily["low"]) & (daily["low"] > 0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        close = np.log(daily["close"])
+        mid = (np.log(daily["high"]) + np.log(daily["low"])) / 2
+    by_stock = daily["permaticker"]
+    prev_close, prev_mid = close.groupby(by_stock).shift(1), mid.groupby(by_stock).shift(1)
+    prev_traded = traded.groupby(by_stock).shift(1, fill_value=False)
+    product = (prev_close - prev_mid) * (prev_close - mid)
+    return product.where(traded & prev_traded).rename("ar_product")
+
+
 def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
     """Turn daily `stocks` prices into one total return per stock per calendar month.
 
@@ -96,7 +131,7 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     level is not what anyone could have seen on that date (look-ahead).
 
     Columns: permaticker, month_end, ret, last_trade_date, close_unadj, close_split_adj,
-    n_days, dret_sum, dret_sumsq.
+    n_days, dret_sum, dret_sumsq, ar_n, ar_sum.
     `last_trade_date` lets later steps spot stale prices (no trade near month end).
     `close_unadj` is the last close as actually traded (no split adjustment), the
     price an investor saw at month end; `close` is split-adjusted backwards, so a
@@ -108,6 +143,10 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     month's daily `closeadj` returns (a stock's first day has none). Enough to
     rebuild the std of daily returns over any run of months (see
     `features.add_volatility`) without reading the daily data again.
+
+    `ar_n`, `ar_sum`: count and sum of the month's Abdi-Ranaldo day-pair terms
+    (`abdi_ranaldo_product`), so the spread can be estimated over any group of
+    stocks and months (see `portfolio.estimated_spread_bps`).
     """
     if stocks.duplicated(["ticker", "date"]).any():
         raise ValueError("stocks has duplicate (ticker, date) rows")
@@ -119,7 +158,8 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     if unmapped:
         raise ValueError(f"stocks tickers missing from security master: {sorted(unmapped)[:10]}")
 
-    daily = stocks[["ticker", "date", "closeadj", "close", "closeunadj"]].assign(
+    price_cols = ["ticker", "date", "closeadj", "close", "closeunadj", "high", "low", "volume"]
+    daily = stocks[price_cols].assign(
         permaticker=lambda d: d["ticker"].map(ids),
         month=lambda d: d["date"].dt.to_period("M"),
     )
@@ -127,14 +167,21 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     daily = daily.sort_values(["permaticker", "date"])
     prev_daily = daily.groupby("permaticker")["closeadj"].shift(1)
     daily["dret"] = daily["closeadj"] / prev_daily - 1
+    daily["ar_product"] = abdi_ranaldo_product(daily)
     moments = (
         daily.assign(dret_sq=daily["dret"] ** 2)
         .groupby(["permaticker", "month"])
-        .agg(n_days=("dret", "count"), dret_sum=("dret", "sum"), dret_sumsq=("dret_sq", "sum"))
+        .agg(
+            n_days=("dret", "count"),
+            dret_sum=("dret", "sum"),
+            dret_sumsq=("dret_sq", "sum"),
+            ar_n=("ar_product", "count"),
+            ar_sum=("ar_product", "sum"),
+        )
     )
 
     monthly = (
-        daily.drop(columns="dret")
+        daily.drop(columns=["dret", "ar_product", "high", "low", "volume"])
         .groupby(["permaticker", "month"], as_index=False)
         .last()
         .rename(
@@ -159,7 +206,7 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     monthly = monthly.merge(moments, on=["permaticker", "month"], how="left", validate="one_to_one")
     monthly["month_end"] = monthly["month"].dt.to_timestamp(how="end").dt.normalize()
     cols = ["permaticker", "month_end", "ret", "last_trade_date", "close_unadj", "close_split_adj"]
-    cols += ["n_days", "dret_sum", "dret_sumsq"]
+    cols += ["n_days", "dret_sum", "dret_sumsq", "ar_n", "ar_sum"]
     return monthly[cols].reset_index(drop=True)
 
 
@@ -257,7 +304,7 @@ def load_monthly_returns(
     # Read only what returns need: the full table is ~45M rows.
     stocks = pd.read_parquet(
         raw_dir / "stocks.parquet",
-        columns=["ticker", "date", "closeadj", "close", "closeunadj"],
+        columns=["ticker", "date", "closeadj", "close", "closeunadj", "high", "low", "volume"],
         filters=[("ticker", "in", list(universe["ticker"]))],
     )
     monthly = build_monthly_returns(stocks, master)

@@ -1,5 +1,6 @@
 """Tests for the real-data loaders. Small hand-made frames, no files or network."""
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -93,16 +94,90 @@ def master_for(*tickers):
     return pd.DataFrame({"ticker": list(tickers), "permaticker": range(1, len(tickers) + 1)})
 
 
-def price_rows(ticker, dates, closeadj, close=None, closeunadj=None):
+def price_rows(ticker, dates, closeadj, close=None, closeunadj=None, high=None, low=None):
+    close = close if close is not None else closeadj
     return pd.DataFrame(
         {
             "ticker": ticker,
             "date": pd.to_datetime(dates),
             "closeadj": closeadj,
-            "close": close if close is not None else closeadj,
+            "close": close,
             "closeunadj": closeunadj if closeunadj is not None else closeadj,
+            "high": high if high is not None else close,
+            "low": low if low is not None else close,
+            "volume": 1000.0,
         }
     )
+
+
+def ar_daily(highs, lows, closes, volumes=None, permaticker=1):
+    volumes = volumes if volumes is not None else [1000.0] * len(closes)
+    return pd.DataFrame(
+        {"permaticker": permaticker, "high": highs, "low": lows, "close": closes, "volume": volumes}
+    )
+
+
+def ar_spread(products):
+    return np.sqrt(max(4 * np.nanmean(products), 0))
+
+
+X = np.log(101 / 99)  # log range of a day trading 99-101
+
+
+def test_abdi_ranaldo_by_hand():
+    # Day 1 closes at its high (the ask); both days trade 99-101, so the close sits
+    # X/2 above both mid-ranges: product = (X/2)^2 and S = sqrt(4 (X/2)^2) = X.
+    p = real.abdi_ranaldo_product(ar_daily([101.0, 101.0], [99.0, 99.0], [101.0, 100.0]))
+    assert np.isnan(p.iloc[0])  # first day: no previous day
+    assert p.iloc[1] == pytest.approx((X / 2) ** 2)
+    assert ar_spread(p) == pytest.approx(X)
+
+
+def test_abdi_ranaldo_close_at_mid_is_zero_spread():
+    mid = np.sqrt(101 * 99)  # exactly the mid-range in logs
+    p = real.abdi_ranaldo_product(ar_daily([101.0, 101.0], [99.0, 99.0], [mid, mid]))
+    assert p.iloc[1] == pytest.approx(0.0, abs=1e-15)
+
+
+def test_abdi_ranaldo_skips_no_trade_days_and_other_stocks():
+    daily = pd.concat(
+        [
+            # Day 2 has no volume; day 3 has high == low (vendor repeated the close).
+            ar_daily([101.0] * 4, [99.0, 99.0, 101.0, 99.0], [101.0] * 4, [1e3, 0.0, 1e3, 1e3]),
+            ar_daily([101.0, 101.0], [99.0, 99.0], [101.0, 101.0], permaticker=2),
+        ],
+        ignore_index=True,
+    )
+    p = real.abdi_ranaldo_product(daily)
+    assert p.iloc[:4].isna().all()  # every pair touches a no-trade day
+    assert np.isnan(p.iloc[4])  # stock 2's first day is not paired with stock 1
+    assert p.iloc[5] == pytest.approx((X / 2) ** 2)
+
+
+def test_monthly_spread_terms_file_each_pair_under_its_later_day():
+    # Jan 30 -> Jan 31 is a January pair; Jan 31 -> Feb 1 a February one.
+    stocks = price_rows(
+        "AAA",
+        ["2024-01-30", "2024-01-31", "2024-02-01"],
+        [101.0] * 3,
+        high=[101.0] * 3,
+        low=[99.0] * 3,
+    )
+    out = real.build_monthly_returns(stocks, master_for("AAA"))
+    assert out["ar_n"].tolist() == [1, 1]
+    assert out["ar_sum"].tolist() == pytest.approx([(X / 2) ** 2] * 2)
+
+
+def test_monthly_spread_terms_ignore_later_days():
+    # Leakage check: a wild March range cannot move January or February.
+    dates = ["2024-01-30", "2024-01-31", "2024-02-28", "2024-02-29", "2024-03-01"]
+    base = price_rows("AAA", dates, [101.0] * 5, high=[101.0] * 5, low=[99.0] * 5)
+    wild = base.copy()
+    wild.loc[4, ["high", "low"]] = [500.0, 1.0]
+    a = real.build_monthly_returns(base, master_for("AAA"))
+    b = real.build_monthly_returns(wild, master_for("AAA"))
+    pd.testing.assert_frame_equal(a.iloc[:2], b.iloc[:2])
+    assert b["ar_sum"].iloc[2] != a["ar_sum"].iloc[2]  # March itself does change
 
 
 def test_monthly_return_matches_hand_calculation():
