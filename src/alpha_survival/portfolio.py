@@ -3,7 +3,8 @@
 Each month t: rank stocks by forecast, buy the top decile and short the bottom
 decile, hold over month t+1 (so each stock earns its `fwd_ret`). The short pays
 for the long, so the strategy's return is long-leg minus short-leg return.
-GROSS of trading and borrowing costs; those come later.
+GROSS of trading and borrowing costs; `turnover` measures how much is traded,
+the first ingredient of a cost estimate.
 """
 
 from __future__ import annotations
@@ -36,18 +37,16 @@ def assign_legs(oos: pd.DataFrame, n_groups: int = N_GROUPS) -> pd.Series:
     return leg.rename("leg")
 
 
-def long_short_returns(
+def leg_weights(
     oos: pd.DataFrame, n_groups: int = N_GROUPS, weighting: str = "equal"
 ) -> pd.DataFrame:
-    """Monthly returns of the top-minus-bottom portfolio (see `assign_legs`).
+    """One row per held stock-month: month_end, permaticker, leg, weight, fwd_ret.
 
-    `oos` holds month_end, pred, fwd_ret and, for value weighting, `market_cap`
-    at formation (known at month_end). Stocks with a missing `fwd_ret` (data gap,
-    end of sample) drop out of their leg after legs are set: a small bias,
-    since a real holder would have earned something.
-
-    Columns: long, short, long_short (= long - short), n_long, n_short; indexed by
-    formation month. Months missing either leg are left out.
+    `oos` holds month_end, permaticker, pred, fwd_ret and, for value weighting,
+    `market_cap` at formation (known at month_end). Weights sum to 1 within each
+    leg and month, so the portfolio is $1 long and $1 short. Stocks with a missing
+    `fwd_ret` (data gap, end of sample) drop out of their leg after legs are set:
+    a small bias, since a real holder would have earned something.
     """
     if weighting not in WEIGHTINGS:
         raise ValueError(f"weighting must be one of {WEIGHTINGS}")
@@ -58,15 +57,27 @@ def long_short_returns(
     rows = rows[rows["leg"].isin([1, -1])].dropna(subset=[TARGET])
     if weighting == "value":
         rows = rows[rows["market_cap"] > 0]
-        weight = rows["market_cap"]
+        raw = rows["market_cap"]
     else:
-        weight = pd.Series(1.0, index=rows.index)
-    rows = rows.assign(w=weight, w_ret=weight * rows[TARGET])
+        raw = pd.Series(1.0, index=rows.index)
+    weight = raw / raw.groupby([rows["month_end"], rows["leg"]]).transform("sum")
+    cols = [c for c in ("month_end", "permaticker") if c in rows.columns]
+    return rows[cols].assign(leg=rows["leg"], weight=weight, **{TARGET: rows[TARGET]})
 
-    legs = rows.groupby(["month_end", "leg"]).agg(
-        w=("w", "sum"), w_ret=("w_ret", "sum"), n=("w", "size")
-    )
-    leg_ret = (legs["w_ret"] / legs["w"]).unstack("leg")
+
+def long_short_returns(
+    oos: pd.DataFrame, n_groups: int = N_GROUPS, weighting: str = "equal"
+) -> pd.DataFrame:
+    """Monthly returns of the top-minus-bottom portfolio (see `assign_legs`).
+
+    Inputs as for `leg_weights`. Columns: long, short, long_short (= long - short),
+    n_long, n_short; indexed by formation month. Months missing either leg are
+    left out.
+    """
+    rows = leg_weights(oos, n_groups, weighting)
+    rows = rows.assign(w_ret=rows["weight"] * rows[TARGET])
+    legs = rows.groupby(["month_end", "leg"]).agg(w_ret=("w_ret", "sum"), n=("weight", "size"))
+    leg_ret = legs["w_ret"].unstack("leg")
     leg_n = legs["n"].unstack("leg")
     out = pd.DataFrame(
         {
@@ -78,6 +89,35 @@ def long_short_returns(
     ).dropna(subset=["long", "short"])
     out["long_short"] = out["long"] - out["short"]
     return out[["long", "short", "long_short", "n_long", "n_short"]]
+
+
+def turnover(weights: pd.DataFrame) -> pd.Series:
+    """Dollars traded each month per $1 long (and $1 short), both legs together.
+
+    `weights` is the output of `leg_weights`. Over a month each holding drifts
+    with its own return: weight w_i becomes w_i (1 + r_i) / (1 + R_leg). At the
+    next formation date we trade from those drifted weights to the new targets,
+    so turnover_t = sum_i |target_i,t - drifted_i,t| over long and short legs
+    (short weights negative). Selling a name and buying a replacement both count.
+
+    The first month buys both legs from cash (turnover 2); a strategy that keeps
+    identical names and weights through flat returns trades nothing. Each leg is
+    reset to $1 each month: the cash from that reset is not counted as trading.
+    """
+    w = weights.assign(signed=weights["leg"] * weights["weight"])
+    leg_ret = (w["weight"] * w[TARGET]).groupby([w["month_end"], w["leg"]]).transform("sum")
+    w = w.assign(drifted=w["signed"] * (1 + w[TARGET]) / (1 + leg_ret))
+
+    months = np.sort(w["month_end"].unique())
+    next_month = dict(zip(months[:-1], months[1:], strict=True))
+    held = w.assign(month_end=w["month_end"].map(next_month)).dropna(subset=["month_end"])
+    trades = w[["month_end", "permaticker", "signed"]].merge(
+        held[["month_end", "permaticker", "drifted"]],
+        on=["month_end", "permaticker"],
+        how="outer",
+    )
+    traded = (trades["signed"].fillna(0) - trades["drifted"].fillna(0)).abs()
+    return traded.groupby(trades["month_end"]).sum().reindex(months).rename("turnover")
 
 
 def max_drawdown(returns: pd.Series) -> float:

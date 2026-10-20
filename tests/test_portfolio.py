@@ -5,9 +5,11 @@ import pytest
 from alpha_survival.models import TARGET
 from alpha_survival.portfolio import (
     assign_legs,
+    leg_weights,
     long_short_returns,
     max_drawdown,
     summarise,
+    turnover,
 )
 
 
@@ -84,6 +86,58 @@ def test_bad_inputs_raise():
         long_short_returns(oos, weighting="cap")
     with pytest.raises(KeyError, match="market_cap"):
         long_short_returns(oos, weighting="value")
+
+
+def stocks_oos(month, names, pred, fwd_ret):
+    return month_oos(month, pred, fwd_ret).assign(permaticker=names)
+
+
+def test_leg_weights_sum_to_one_per_leg():
+    oos = month_oos("2020-01-31", [4.0, 3.0, 2.0, 1.0], [0.1, 0.0, 0.0, 0.0], [1.0, 3.0, 1.0, 1.0])
+    w = leg_weights(oos, n_groups=2, weighting="value")
+    assert w.groupby("leg")["weight"].sum().tolist() == pytest.approx([1.0, 1.0])
+    assert w["weight"].tolist() == pytest.approx([0.25, 0.75, 0.5, 0.5])
+
+
+def test_turnover_first_month_buys_both_legs_then_nothing_if_unchanged():
+    names, pred, flat = ["A", "B", "C", "D"], [4.0, 3.0, 2.0, 1.0], [0.0] * 4
+    oos = pd.concat([stocks_oos(m, names, pred, flat) for m in ("2020-01-31", "2020-02-29")])
+    t = turnover(leg_weights(oos, n_groups=2))
+    assert t.tolist() == pytest.approx([2.0, 0.0])
+
+
+def test_turnover_rebalances_drifted_weights_by_hand():
+    # Long A, B at 0.5 each; A doubles, so the long leg grows to 1.5 and drifts to
+    # A = 1/1.5 = 2/3, B = 1/3. Back to 0.5/0.5 trades 1/6 + 1/6 = 1/3. Short is flat.
+    names, pred = ["A", "B", "C", "D"], [4.0, 3.0, 2.0, 1.0]
+    jan = stocks_oos("2020-01-31", names, pred, [1.0, 0.0, 0.0, 0.0])
+    feb = stocks_oos("2020-02-29", names, pred, [0.0] * 4)
+    t = turnover(leg_weights(pd.concat([jan, feb]), n_groups=2))
+    assert t.loc["2020-02-29"] == pytest.approx(1 / 3)
+
+
+def test_turnover_counts_both_sell_and_buy_when_names_change():
+    jan = stocks_oos(
+        "2020-01-31", ["A", "B", "X", "Y", "C", "D"], [4.0, 3.0, 2.5, 2.5, 2.0, 1.0], [0.0] * 6
+    )
+    # New long names E, F; old longs A, B now in the middle and not held.
+    feb = stocks_oos(
+        "2020-02-29", ["E", "F", "A", "B", "C", "D"], [9.0, 8.0, 3.0, 3.0, 2.0, 1.0], [0.0] * 6
+    )
+    t = turnover(leg_weights(pd.concat([jan, feb]), n_groups=3))
+    assert t.loc["2020-02-29"] == pytest.approx(2.0)  # sell $1 of A, B; buy $1 of E, F
+
+
+def test_turnover_ignores_later_months():
+    # Leakage check: what happens in March cannot change January or February.
+    names, pred = ["A", "B", "C", "D"], [4.0, 3.0, 2.0, 1.0]
+    jan = stocks_oos("2020-01-31", names, pred, [0.2, -0.1, 0.05, 0.0])
+    feb = stocks_oos("2020-02-29", names, [1.0, 2.0, 3.0, 4.0], [0.0, 0.3, -0.2, 0.1])
+    mar = stocks_oos("2020-03-31", names, pred, [0.0] * 4)
+    mar_wild = stocks_oos("2020-03-31", ["X", "Y", "Z", "W"], pred, [5.0, -0.9, 0.0, 1.0])
+    a = turnover(leg_weights(pd.concat([jan, feb, mar]), n_groups=2))
+    b = turnover(leg_weights(pd.concat([jan, feb, mar_wild]), n_groups=2))
+    assert a.iloc[:2].tolist() == pytest.approx(b.iloc[:2].tolist())
 
 
 def test_max_drawdown_by_hand():
