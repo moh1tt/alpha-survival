@@ -33,7 +33,15 @@ from alpha_survival.models import (
     SklearnForecaster,
     ZeroForecast,
 )
-from alpha_survival.portfolio import WEIGHTINGS, long_short_returns, summarise
+from alpha_survival.portfolio import (
+    WEIGHTINGS,
+    breakeven_cost_bps,
+    leg_weights,
+    long_short_returns,
+    net_returns,
+    summarise,
+    turnover,
+)
 from alpha_survival.walkforward import walk_forward_predict
 
 REPORT_PATH = Path("reports/baselines.md")
@@ -53,6 +61,12 @@ PUBLISHED_SIGN = {
     "asset_growth": -1,  # Cooper, Gulen & Schill 2008
     "vol_3m": -1,  # Ang, Hodrick, Xing & Zhang 2006
 }
+# Flat trading cost per dollar traded, in basis points: roughly large caps traded
+# by a big institution (10) up to small caps (50).
+COST_BPS = (10, 20, 50)
+# Annual fee for borrowing the shorted stock. 50 bps is typical for easy-to-borrow
+# names; small, heavily shorted stocks cost far more, so this is optimistic.
+BORROW_BPS_PA = 50
 
 
 def baseline_models() -> list[Forecaster]:
@@ -208,11 +222,13 @@ def run_all(
 
 
 def portfolio_table(oos_by_model: dict[str, pd.DataFrame], panel: pd.DataFrame) -> pd.DataFrame:
-    """Gross decile long-short performance for OLS and each signal, EW and VW.
+    """Decile long-short performance for OLS and each signal, EW and VW.
 
-    Signals trade their published direction (`PUBLISHED_SIGN`); OLS's forecast already
-    carries the directions it learned in training. Value weights use market cap at
-    formation (month_end), known when the trade is placed.
+    Gross stats, plus average turnover, net Sharpe at each `COST_BPS` (with the
+    `BORROW_BPS_PA` short fee) and the break-even trading cost. Signals trade their
+    published direction (`PUBLISHED_SIGN`); OLS's forecast already carries the
+    directions it learned in training. Value weights use market cap at formation
+    (month_end), known when the trade is placed.
     """
     caps = panel[["permaticker", "month_end", "market_cap"]]
     candidates = [("ols", 1)] + [(f"signal_{c}", sign) for c, sign in PUBLISHED_SIGN.items()]
@@ -225,31 +241,51 @@ def portfolio_table(oos_by_model: dict[str, pd.DataFrame], panel: pd.DataFrame) 
         direction = "learned" if name == "ols" else ("high" if sign > 0 else "low")
         for weighting in WEIGHTINGS:
             ls = long_short_returns(oos, weighting=weighting)
+            gross = ls["long_short"]
+            to = turnover(leg_weights(oos, weighting=weighting))
+            net = {}
+            for c in COST_BPS:
+                net_ret = net_returns(gross, to, c, BORROW_BPS_PA)
+                net[f"sharpe_net_{c}bps"] = summarise(net_ret)["sharpe"]
             rows.append(
                 {
                     "portfolio": name,
                     "direction": direction,
                     "weighting": weighting,
-                    **summarise(ls["long_short"]),
+                    **summarise(gross),
                     "avg_stocks_per_leg": float(ls[["n_long", "n_short"]].mean().mean()),
+                    "avg_turnover": float(to.reindex(gross.index).mean()),
+                    **net,
+                    "breakeven_bps": breakeven_cost_bps(gross, to, BORROW_BPS_PA),
                 }
             )
     return pd.DataFrame(rows)
 
 
 def render_portfolios(table: pd.DataFrame) -> str:
-    digits = {
+    keys = ["portfolio", "direction", "weighting"]
+    gross_digits = {
         "ann_return": 4,
         "ann_vol": 4,
         "sharpe": 2,
         "nw_t_stat": 2,
         "max_drawdown": 3,
         "hit_rate": 3,
+        "n_months": 0,
         "avg_stocks_per_leg": 0,
     }
-    shown = table.assign(
-        **{c: table[c].map(lambda v, d=d: f"{v:.{d}f}") for c, d in digits.items()}
-    )
+    net_digits = {
+        "avg_turnover": 2,
+        "sharpe": 2,
+        **{f"sharpe_net_{c}bps": 2 for c in COST_BPS},
+        "breakeven_bps": 0,
+    }
+
+    def shown(digits: dict[str, int]) -> pd.DataFrame:
+        cols = {c: table[c].map(lambda v, d=d: f"{v:.{d}f}") for c, d in digits.items()}
+        return table[keys].assign(**cols)
+
+    costs = ", ".join(str(c) for c in COST_BPS)
     return "\n".join(
         [
             "## Decile long-short portfolios (GROSS of costs)",
@@ -267,7 +303,24 @@ def render_portfolios(table: pd.DataFrame) -> str:
             "- `ann_return` = 12 x mean monthly; `sharpe` = mean / std x sqrt(12); `nw_t_stat` "
             "of the mean monthly return; `max_drawdown` of $1 compounded.",
             "",
-            markdown_table(shown),
+            markdown_table(shown(gross_digits)),
+            "",
+            "## Decile long-short portfolios NET of costs",
+            "",
+            "**Real data, out-of-sample, with a simple flat cost model. Same portfolios as "
+            "above.**",
+            "",
+            "- `avg_turnover`: average dollars traded per month per $1 in each leg, both "
+            "legs together (2 = both legs fully replaced). Includes trades back to target "
+            "after each holding drifts with its own return.",
+            f"- `sharpe_net_Xbps`: Sharpe after paying X bps (0.01%) per dollar traded and "
+            f"a {BORROW_BPS_PA} bps/year fee on the $1 short. X = {costs}: roughly big "
+            "institution trading large caps up to small caps. A flat cost is generous to "
+            "equal-weighted portfolios, whose small stocks cost more to trade.",
+            "- `breakeven_bps`: the trading cost at which the average net return is zero. "
+            "Compare it with what you could realistically trade at.",
+            "",
+            markdown_table(shown(net_digits)),
             "",
         ]
     )

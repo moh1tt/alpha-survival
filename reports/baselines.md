@@ -52,3 +52,30 @@
 | signal_asset_growth | low | value | -0.0093 | 0.1347 | -0.07 | -0.32 | -0.563 | 0.460 | 285 | 330 |
 | signal_vol_3m | low | equal | 0.0387 | 0.2372 | 0.16 | 0.77 | -0.648 | 0.533 | 285 | 362 |
 | signal_vol_3m | low | value | 0.0123 | 0.2972 | 0.04 | 0.20 | -0.838 | 0.516 | 285 | 338 |
+
+## Decile long-short portfolios NET of costs
+
+**Real data, out-of-sample, with a simple flat cost model. Same portfolios as above.**
+
+- `avg_turnover`: average dollars traded per month per $1 in each leg, both legs together (2 = both legs fully replaced). Includes trades back to target after each holding drifts with its own return.
+- `sharpe_net_Xbps`: Sharpe after paying X bps (0.01%) per dollar traded and a 50 bps/year fee on the $1 short. X = 10, 20, 50: roughly big institution trading large caps up to small caps. A flat cost is generous to equal-weighted portfolios, whose small stocks cost more to trade.
+- `breakeven_bps`: the trading cost at which the average net return is zero. Compare it with what you could realistically trade at.
+
+| portfolio | direction | weighting | avg_turnover | sharpe | sharpe_net_10bps | sharpe_net_20bps | sharpe_net_50bps | breakeven_bps |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ols | learned | equal | 1.74 | 0.71 | 0.53 | 0.39 | -0.03 | 48 |
+| ols | learned | value | 1.86 | 0.27 | 0.12 | -0.01 | -0.38 | 20 |
+| signal_mom_12_1 | high | equal | 1.34 | 0.40 | 0.29 | 0.20 | -0.06 | 43 |
+| signal_mom_12_1 | high | value | 1.50 | 0.40 | 0.31 | 0.24 | 0.04 | 56 |
+| signal_log_mcap | low | equal | 0.38 | -0.61 | -0.71 | -0.75 | -0.89 | -146 |
+| signal_log_mcap | low | value | 0.30 | -0.48 | -0.57 | -0.60 | -0.71 | -151 |
+| signal_bm | high | equal | 0.68 | 0.18 | 0.09 | 0.03 | -0.13 | 26 |
+| signal_bm | high | value | 0.55 | -0.16 | -0.21 | -0.24 | -0.33 | -59 |
+| signal_rev_1m | low | equal | 3.48 | 0.23 | -0.09 | -0.38 | -1.23 | 7 |
+| signal_rev_1m | low | value | 3.68 | -0.17 | -0.40 | -0.60 | -1.21 | -9 |
+| signal_gp_a | high | equal | 0.43 | 0.83 | 0.73 | 0.68 | 0.52 | 149 |
+| signal_gp_a | high | value | 0.31 | 0.67 | 0.60 | 0.57 | 0.48 | 210 |
+| signal_asset_growth | low | equal | 0.80 | 0.08 | -0.07 | -0.17 | -0.46 | 3 |
+| signal_asset_growth | low | value | 0.71 | -0.07 | -0.17 | -0.23 | -0.42 | -17 |
+| signal_vol_3m | low | equal | 1.18 | 0.16 | 0.08 | 0.02 | -0.16 | 24 |
+| signal_vol_3m | low | value | 1.23 | 0.04 | -0.03 | -0.07 | -0.22 | 5 |

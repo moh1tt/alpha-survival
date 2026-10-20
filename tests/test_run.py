@@ -4,6 +4,7 @@ import pytest
 
 from alpha_survival.models import HistoricalMean
 from alpha_survival.run import (
+    COST_BPS,
     PUBLISHED_SIGN,
     RAW_FEATURES,
     baseline_models,
@@ -130,7 +131,13 @@ def test_portfolio_table_covers_ols_and_every_signal_both_weightings():
     assert set(table["portfolio"]) == {"ols"} | {f"signal_{c}" for c in RAW_FEATURES}
     assert (table.groupby("portfolio")["weighting"].apply(set) == {"equal", "value"}).all()
     assert table["sharpe"].notna().all()
-    assert "GROSS of costs" in render_portfolios(table)
+    report = render_portfolios(table)
+    assert "GROSS of costs" in report and "NET of costs" in report
+    # Costs only ever subtract: net Sharpe falls as the trading cost rises.
+    net = table[[f"sharpe_net_{c}bps" for c in COST_BPS]]
+    assert (table["sharpe"] > net.iloc[:, 0]).all()
+    assert (net.diff(axis=1).iloc[:, 1:] < 0).all().all()
+    assert (table["avg_turnover"] > 0).all()
 
 
 def test_signal_portfolios_trade_the_published_direction():

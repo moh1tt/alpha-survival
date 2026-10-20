@@ -3,8 +3,8 @@
 Each month t: rank stocks by forecast, buy the top decile and short the bottom
 decile, hold over month t+1 (so each stock earns its `fwd_ret`). The short pays
 for the long, so the strategy's return is long-leg minus short-leg return.
-GROSS of trading and borrowing costs; `turnover` measures how much is traded,
-the first ingredient of a cost estimate.
+`long_short_returns` is GROSS of costs; `turnover` measures how much is traded
+and `net_returns` charges a flat cost per dollar traded plus a short-borrow fee.
 """
 
 from __future__ import annotations
@@ -118,6 +118,32 @@ def turnover(weights: pd.DataFrame) -> pd.Series:
     )
     traded = (trades["signed"].fillna(0) - trades["drifted"].fillna(0)).abs()
     return traded.groupby(trades["month_end"]).sum().reindex(months).rename("turnover")
+
+
+def net_returns(
+    long_short: pd.Series, turnover: pd.Series, cost_bps: float, borrow_bps_pa: float
+) -> pd.Series:
+    """Long-short returns after trading and short-borrow costs.
+
+    Each month pays `cost_bps` (basis points, 1 bp = 0.01%) per dollar traded at
+    formation, times that month's `turnover`, plus 1/12 of the annual fee for
+    borrowing the $1 of shorted stock. Both series are indexed by formation
+    month: the trade at month_end t buys the return earned over t+1.
+    """
+    trading = cost_bps / 1e4 * turnover.reindex(long_short.index)
+    return long_short - trading - borrow_bps_pa / 1e4 / 12
+
+
+def breakeven_cost_bps(long_short: pd.Series, turnover: pd.Series, borrow_bps_pa: float) -> float:
+    """Trading cost (bps per dollar traded) at which the average net return is zero.
+
+    Above this, the strategy loses money on average. NaN if it never trades;
+    negative if the borrow fee alone already wipes out the gross return.
+    """
+    avg_turnover = float(turnover.reindex(long_short.index).mean())
+    if avg_turnover == 0:
+        return float("nan")
+    return (float(long_short.mean()) - borrow_bps_pa / 1e4 / 12) / avg_turnover * 1e4
 
 
 def max_drawdown(returns: pd.Series) -> float:

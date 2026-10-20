@@ -5,9 +5,11 @@ import pytest
 from alpha_survival.models import TARGET
 from alpha_survival.portfolio import (
     assign_legs,
+    breakeven_cost_bps,
     leg_weights,
     long_short_returns,
     max_drawdown,
+    net_returns,
     summarise,
     turnover,
 )
@@ -138,6 +140,34 @@ def test_turnover_ignores_later_months():
     a = turnover(leg_weights(pd.concat([jan, feb, mar]), n_groups=2))
     b = turnover(leg_weights(pd.concat([jan, feb, mar_wild]), n_groups=2))
     assert a.iloc[:2].tolist() == pytest.approx(b.iloc[:2].tolist())
+
+
+def test_net_returns_by_hand():
+    months = pd.to_datetime(["2020-01-31", "2020-02-29"])
+    gross = pd.Series([0.02, 0.01], index=months)
+    to = pd.Series([2.0, 0.5], index=months)
+    # 20 bps x turnover, plus 60 bps / 12 = 5 bps borrow each month.
+    net = net_returns(gross, to, cost_bps=20, borrow_bps_pa=60)
+    assert net.tolist() == pytest.approx([0.02 - 0.0040 - 0.0005, 0.01 - 0.0010 - 0.0005])
+    assert net_returns(gross, to, 0, 0).equals(gross)
+
+
+def test_net_returns_charge_each_month_its_own_turnover():
+    # Turnover for a month the long-short series lacks is ignored, not shifted.
+    gross = pd.Series([0.01], index=pd.to_datetime(["2020-02-29"]))
+    to = pd.Series([2.0, 0.0], index=pd.to_datetime(["2020-01-31", "2020-02-29"]))
+    assert net_returns(gross, to, 50, 0).iloc[0] == pytest.approx(0.01)
+
+
+def test_breakeven_cost_by_hand():
+    months = pd.to_datetime(["2020-01-31", "2020-02-29"])
+    gross = pd.Series([0.02, 0.01], index=months)  # mean 1.5%
+    to = pd.Series([2.0, 1.0], index=months)  # mean 1.5
+    # (0.015 - 0.0005) / 1.5 = 0.00967 -> 96.7 bps; net mean there is exactly zero.
+    b = breakeven_cost_bps(gross, to, borrow_bps_pa=60)
+    assert b == pytest.approx(96.6667, abs=1e-3)
+    assert net_returns(gross, to, b, 60).mean() == pytest.approx(0.0, abs=1e-12)
+    assert np.isnan(breakeven_cost_bps(gross, to * 0, 60))
 
 
 def test_max_drawdown_by_hand():
