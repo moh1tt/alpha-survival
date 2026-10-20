@@ -36,6 +36,7 @@ from alpha_survival.models import (
 from alpha_survival.portfolio import (
     WEIGHTINGS,
     breakeven_cost_bps,
+    estimated_spread_bps,
     leg_weights,
     long_short_returns,
     net_returns,
@@ -69,6 +70,9 @@ COST_BPS = (10, 20, 50)
 # Annual fee for borrowing the shorted stock. 50 bps is typical for easy-to-borrow
 # names; small, heavily shorted stocks cost far more, so this is optimistic.
 BORROW_BPS_PA = 50
+# Eras for the spread table: before decimalisation (2001), then roughly 7-year blocks.
+SPREAD_ERAS = [1996, 2000, 2008, 2015, 2026]
+SPREAD_ERA_LABELS = ["1997-2000", "2001-2008", "2009-2015", "2016-2026"]
 
 
 def baseline_models() -> list[Forecaster]:
@@ -226,13 +230,15 @@ def run_all(
 def portfolio_table(oos_by_model: dict[str, pd.DataFrame], panel: pd.DataFrame) -> pd.DataFrame:
     """Decile long-short performance for OLS and each signal, EW and VW.
 
-    Gross stats, plus average turnover, net Sharpe at each `COST_BPS` (with the
-    `BORROW_BPS_PA` short fee) and the break-even trading cost. Signals trade their
+    Gross stats, plus average turnover, net Sharpe at each flat `COST_BPS` and at
+    each stock's estimated spread (`estimated_spread_bps`), all with the
+    `BORROW_BPS_PA` short fee, and the break-even trading cost. Signals trade their
     published direction (`PUBLISHED_SIGN`); OLS's forecast already carries the
     directions it learned in training. Value weights use market cap at formation
     (month_end), known when the trade is placed.
     """
     caps = panel[["permaticker", "month_end", "market_cap"]]
+    spread = estimated_spread_bps(panel).set_index(["permaticker", "month_end"])["cost_bps"]
     candidates = [("ols", 1)] + [(f"signal_{c}", sign) for c, sign in PUBLISHED_SIGN.items()]
     rows = []
     for name, sign in candidates:
@@ -250,6 +256,10 @@ def portfolio_table(oos_by_model: dict[str, pd.DataFrame], panel: pd.DataFrame) 
             for c in COST_BPS:
                 net_ret = net_returns(gross, trading_costs(trade_rows, c), BORROW_BPS_PA)
                 net[f"sharpe_net_{c}bps"] = summarise(net_ret)["sharpe"]
+            est_cost = trading_costs(trade_rows, spread).reindex(gross.index)
+            net["sharpe_net_est"] = summarise(net_returns(gross, est_cost, BORROW_BPS_PA))["sharpe"]
+            # Average cost paid per dollar traded: what the estimated spreads amount to.
+            net["avg_cost_bps"] = float(est_cost.sum() / to.reindex(gross.index).sum() * 1e4)
             rows.append(
                 {
                     "portfolio": name,
@@ -281,6 +291,8 @@ def render_portfolios(table: pd.DataFrame) -> str:
         "avg_turnover": 2,
         "sharpe": 2,
         **{f"sharpe_net_{c}bps": 2 for c in COST_BPS},
+        "avg_cost_bps": 0,
+        "sharpe_net_est": 2,
         "breakeven_bps": 0,
     }
 
@@ -310,8 +322,9 @@ def render_portfolios(table: pd.DataFrame) -> str:
             "",
             "## Decile long-short portfolios NET of costs",
             "",
-            "**Real data, out-of-sample, with a simple flat cost model. Same portfolios as "
-            "above.**",
+            "**Real data, out-of-sample. Same portfolios as above; bid-ask spread and short "
+            "borrow fee only, no market impact (fine for a small account, optimistic for "
+            "a large fund).**",
             "",
             "- `avg_turnover`: average dollars traded per month per $1 in each leg, both "
             "legs together (2 = both legs fully replaced). Includes trades back to target "
@@ -320,10 +333,56 @@ def render_portfolios(table: pd.DataFrame) -> str:
             f"a {BORROW_BPS_PA} bps/year fee on the $1 short. X = {costs}: roughly big "
             "institution trading large caps up to small caps. A flat cost is generous to "
             "equal-weighted portfolios, whose small stocks cost more to trade.",
-            "- `breakeven_bps`: the trading cost at which the average net return is zero. "
-            "Compare it with what you could realistically trade at.",
+            "- `sharpe_net_est`: Sharpe after paying each stock's estimated half-spread "
+            "(table below) plus the borrow fee. `avg_cost_bps`: what that averaged per "
+            "dollar traded. Stocks sold after leaving the universe pay that month's "
+            "highest group cost.",
+            "- `breakeven_bps`: the flat trading cost at which the average net return is "
+            "zero. Compare it with `avg_cost_bps`.",
             "",
             markdown_table(shown(net_digits)),
+            "",
+        ]
+    )
+
+
+def spread_table(panel: pd.DataFrame) -> pd.DataFrame:
+    """Average estimated half-spread (bps) by size decile, for a few eras."""
+    est = estimated_spread_bps(panel)
+    # One value per group and month (every stock in a group shares it).
+    by_month = est.groupby(["month_end", "size_group"], as_index=False)["cost_bps"].first()
+    by_month["era"] = pd.cut(by_month["month_end"].dt.year, SPREAD_ERAS, labels=SPREAD_ERA_LABELS)
+    table = by_month.pivot_table(
+        index="era", columns="size_group", values="cost_bps", aggfunc="mean", observed=True
+    )
+    table.columns = [f"size_{c}" for c in table.columns]
+    return table.reset_index()
+
+
+def render_spreads(table: pd.DataFrame) -> str:
+    shown = table.assign(**{c: table[c].map(lambda v: f"{v:.1f}") for c in table.columns[1:]})
+    return "\n".join(
+        [
+            "## Estimated trading cost by company size",
+            "",
+            "**Real data. Half the bid-ask spread (bps per dollar traded), the cost of one "
+            "trade vs. the mid price.**",
+            "",
+            "- Estimated each month from daily high, low and close prices (Abdi & Ranaldo "
+            "2017), pooled over all stocks in the same market-cap decile (`size_1` = "
+            "smallest 10%, `size_10` = largest) because one stock's estimate is mostly "
+            "noise. Days with no trading are skipped. Values are averages over the months "
+            "of each era.",
+            "- Corwin & Schultz (2012) was tried first and rejected: on this data it made "
+            "the smallest stocks look cheapest (no-trade days read as zero spread).",
+            "- Spreads should fall with size, and fall after 2001, when US prices moved "
+            "from 1/16 dollar ticks to cents.",
+            "- The estimator has a noise floor: for the largest stocks it gives ~15 bp, "
+            "well above their real quoted half-spreads (a few bp), and volatile years "
+            "(2008) push it up. So costs for large stocks are overstated, i.e. "
+            "conservative.",
+            "",
+            markdown_table(shown),
             "",
         ]
     )
@@ -342,7 +401,13 @@ def main(argv: list[str] | None = None) -> None:
     print(portfolios.to_string(index=False))
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    report = render_report(table, panel) + "\n" + render_portfolios(portfolios)
+    report = "\n".join(
+        [
+            render_report(table, panel),
+            render_portfolios(portfolios),
+            render_spreads(spread_table(panel)),
+        ]
+    )
     args.out.write_text(report, encoding="utf-8")
     print(f"Report -> {args.out}")
 

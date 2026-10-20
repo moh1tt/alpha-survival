@@ -13,7 +13,9 @@ from alpha_survival.run import (
     prepare,
     render_portfolios,
     render_report,
+    render_spreads,
     run_all,
+    spread_table,
 )
 
 N_STOCKS, N_MONTHS = 15, 40
@@ -36,6 +38,8 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["n_days"] = 21
     panel["dret_sum"] = rng.normal(0, 0.05, len(panel))
     panel["dret_sumsq"] = 21 * rng.uniform(0.0001, 0.002, len(panel))
+    panel["ar_n"] = 20
+    panel["ar_sum"] = 20 * rng.uniform(0, 1e-4, len(panel))
     panel["investable"] = True
     return panel
 
@@ -138,6 +142,15 @@ def test_portfolio_table_covers_ols_and_every_signal_both_weightings():
     assert (table["sharpe"] > net.iloc[:, 0]).all()
     assert (net.diff(axis=1).iloc[:, 1:] < 0).all().all()
     assert (table["avg_turnover"] > 0).all()
+    assert (table["avg_cost_bps"] > 0).all()
+    assert (table["sharpe_net_est"] < table["sharpe"]).all()
+
+
+def test_spread_table_has_one_column_per_size_decile():
+    table = spread_table(prepare(make_panel()))
+    assert list(table.columns) == ["era"] + [f"size_{g}" for g in range(1, 11)]
+    assert (table.drop(columns="era") >= 0).all().all()
+    assert "Abdi & Ranaldo" in render_spreads(table)
 
 
 def test_signal_portfolios_trade_the_published_direction():

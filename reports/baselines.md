@@ -55,27 +55,44 @@
 
 ## Decile long-short portfolios NET of costs
 
-**Real data, out-of-sample, with a simple flat cost model. Same portfolios as above.**
+**Real data, out-of-sample. Same portfolios as above; bid-ask spread and short borrow fee only, no market impact (fine for a small account, optimistic for a large fund).**
 
 - `avg_turnover`: average dollars traded per month per $1 in each leg, both legs together (2 = both legs fully replaced). Includes trades back to target after each holding drifts with its own return.
 - `sharpe_net_Xbps`: Sharpe after paying X bps (0.01%) per dollar traded and a 50 bps/year fee on the $1 short. X = 10, 20, 50: roughly big institution trading large caps up to small caps. A flat cost is generous to equal-weighted portfolios, whose small stocks cost more to trade.
-- `breakeven_bps`: the trading cost at which the average net return is zero. Compare it with what you could realistically trade at.
+- `sharpe_net_est`: Sharpe after paying each stock's estimated half-spread (table below) plus the borrow fee. `avg_cost_bps`: what that averaged per dollar traded. Stocks sold after leaving the universe pay that month's highest group cost.
+- `breakeven_bps`: the flat trading cost at which the average net return is zero. Compare it with `avg_cost_bps`.
 
-| portfolio | direction | weighting | avg_turnover | sharpe | sharpe_net_10bps | sharpe_net_20bps | sharpe_net_50bps | breakeven_bps |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ols | learned | equal | 1.74 | 0.71 | 0.53 | 0.39 | -0.03 | 48 |
-| ols | learned | value | 1.86 | 0.27 | 0.12 | -0.01 | -0.38 | 20 |
-| signal_mom_12_1 | high | equal | 1.34 | 0.40 | 0.29 | 0.20 | -0.06 | 43 |
-| signal_mom_12_1 | high | value | 1.50 | 0.40 | 0.31 | 0.24 | 0.04 | 56 |
-| signal_log_mcap | low | equal | 0.38 | -0.61 | -0.71 | -0.75 | -0.89 | -146 |
-| signal_log_mcap | low | value | 0.30 | -0.48 | -0.57 | -0.60 | -0.71 | -151 |
-| signal_bm | high | equal | 0.68 | 0.18 | 0.09 | 0.03 | -0.13 | 26 |
-| signal_bm | high | value | 0.55 | -0.16 | -0.21 | -0.24 | -0.33 | -59 |
-| signal_rev_1m | low | equal | 3.48 | 0.23 | -0.09 | -0.38 | -1.23 | 7 |
-| signal_rev_1m | low | value | 3.68 | -0.17 | -0.40 | -0.60 | -1.21 | -9 |
-| signal_gp_a | high | equal | 0.43 | 0.83 | 0.73 | 0.68 | 0.52 | 149 |
-| signal_gp_a | high | value | 0.31 | 0.67 | 0.60 | 0.57 | 0.48 | 210 |
-| signal_asset_growth | low | equal | 0.80 | 0.08 | -0.07 | -0.17 | -0.46 | 3 |
-| signal_asset_growth | low | value | 0.71 | -0.07 | -0.17 | -0.23 | -0.42 | -17 |
-| signal_vol_3m | low | equal | 1.18 | 0.16 | 0.08 | 0.02 | -0.16 | 24 |
-| signal_vol_3m | low | value | 1.23 | 0.04 | -0.03 | -0.07 | -0.22 | 5 |
+| portfolio | direction | weighting | avg_turnover | sharpe | sharpe_net_10bps | sharpe_net_20bps | sharpe_net_50bps | avg_cost_bps | sharpe_net_est | breakeven_bps |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ols | learned | equal | 1.74 | 0.71 | 0.53 | 0.39 | -0.03 | 39 | 0.13 | 48 |
+| ols | learned | value | 1.86 | 0.27 | 0.12 | -0.01 | -0.38 | 17 | 0.03 | 20 |
+| signal_mom_12_1 | high | equal | 1.34 | 0.40 | 0.29 | 0.20 | -0.06 | 42 | 0.01 | 43 |
+| signal_mom_12_1 | high | value | 1.50 | 0.40 | 0.31 | 0.24 | 0.04 | 19 | 0.25 | 56 |
+| signal_log_mcap | low | equal | 0.38 | -0.61 | -0.71 | -0.75 | -0.89 | 68 | -0.97 | -146 |
+| signal_log_mcap | low | value | 0.30 | -0.48 | -0.57 | -0.60 | -0.71 | 78 | -0.81 | -151 |
+| signal_bm | high | equal | 0.68 | 0.18 | 0.09 | 0.03 | -0.13 | 48 | -0.12 | 26 |
+| signal_bm | high | value | 0.55 | -0.16 | -0.21 | -0.24 | -0.33 | 22 | -0.25 | -59 |
+| signal_rev_1m | low | equal | 3.48 | 0.23 | -0.09 | -0.38 | -1.23 | 40 | -0.95 | 7 |
+| signal_rev_1m | low | value | 3.68 | -0.17 | -0.40 | -0.60 | -1.21 | 18 | -0.55 | -9 |
+| signal_gp_a | high | equal | 0.43 | 0.83 | 0.73 | 0.68 | 0.52 | 44 | 0.56 | 149 |
+| signal_gp_a | high | value | 0.31 | 0.67 | 0.60 | 0.57 | 0.48 | 15 | 0.58 | 210 |
+| signal_asset_growth | low | equal | 0.80 | 0.08 | -0.07 | -0.17 | -0.46 | 44 | -0.40 | 3 |
+| signal_asset_growth | low | value | 0.71 | -0.07 | -0.17 | -0.23 | -0.42 | 18 | -0.22 | -17 |
+| signal_vol_3m | low | equal | 1.18 | 0.16 | 0.08 | 0.02 | -0.16 | 48 | -0.14 | 24 |
+| signal_vol_3m | low | value | 1.23 | 0.04 | -0.03 | -0.07 | -0.22 | 22 | -0.08 | 5 |
+
+## Estimated trading cost by company size
+
+**Real data. Half the bid-ask spread (bps per dollar traded), the cost of one trade vs. the mid price.**
+
+- Estimated each month from daily high, low and close prices (Abdi & Ranaldo 2017), pooled over all stocks in the same market-cap decile (`size_1` = smallest 10%, `size_10` = largest) because one stock's estimate is mostly noise. Days with no trading are skipped. Values are averages over the months of each era.
+- Corwin & Schultz (2012) was tried first and rejected: on this data it made the smallest stocks look cheapest (no-trade days read as zero spread).
+- Spreads should fall with size, and fall after 2001, when US prices moved from 1/16 dollar ticks to cents.
+- The estimator has a noise floor: for the largest stocks it gives ~15 bp, well above their real quoted half-spreads (a few bp), and volatile years (2008) push it up. So costs for large stocks are overstated, i.e. conservative.
+
+| era | size_1 | size_2 | size_3 | size_4 | size_5 | size_6 | size_7 | size_8 | size_9 | size_10 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1997-2000 | 159.1 | 117.7 | 97.1 | 61.8 | 39.7 | 31.7 | 18.9 | 13.4 | 13.2 | 17.9 |
+| 2001-2008 | 101.7 | 75.3 | 60.1 | 54.5 | 43.3 | 35.4 | 26.0 | 17.6 | 13.9 | 17.2 |
+| 2009-2015 | 96.5 | 56.2 | 44.6 | 34.6 | 26.5 | 22.5 | 18.9 | 16.3 | 17.2 | 17.1 |
+| 2016-2026 | 84.7 | 47.0 | 35.5 | 29.0 | 24.3 | 19.3 | 17.9 | 16.0 | 12.1 | 14.0 |

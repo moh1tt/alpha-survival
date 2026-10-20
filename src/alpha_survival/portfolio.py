@@ -129,6 +129,29 @@ def turnover(weights: pd.DataFrame) -> pd.Series:
     return t.groupby("month_end")["traded"].sum().rename("turnover")
 
 
+def estimated_spread_bps(panel: pd.DataFrame, n_groups: int = N_GROUPS) -> pd.DataFrame:
+    """Cost per dollar traded (half the bid-ask spread, in bps) for each stock-month.
+
+    Abdi & Ranaldo (2017) estimates from a single stock are mostly noise, so each
+    month stocks are sorted into `n_groups` size groups by `market_cap` and every
+    stock is charged its group's spread, pooled over all the group's day pairs:
+    S = sqrt(max(4 x sum(ar_sum) / sum(ar_n), 0)). Half of S is paid per trade
+    (buy at the ask or sell at the bid, vs. the mid). Uses only days up to each
+    month_end, the date the trade is placed.
+
+    `panel`: permaticker, month_end, market_cap, ar_n, ar_sum. Returns permaticker,
+    month_end, size_group (1 = smallest) and cost_bps; rows without a positive
+    market_cap are left out.
+    """
+    rows = panel[["permaticker", "month_end", "market_cap", "ar_n", "ar_sum"]]
+    rows = rows[rows["market_cap"] > 0]
+    pct = rows.groupby("month_end")["market_cap"].rank(pct=True)
+    group = np.ceil(pct * n_groups).clip(1, n_groups).astype(int)
+    pooled = rows.groupby([rows["month_end"], group])[["ar_n", "ar_sum"]].transform("sum")
+    spread = np.sqrt((4 * pooled["ar_sum"] / pooled["ar_n"]).clip(lower=0))
+    return rows[["permaticker", "month_end"]].assign(size_group=group, cost_bps=spread / 2 * 1e4)
+
+
 def trading_costs(trade_rows: pd.DataFrame, cost_bps: float | pd.Series) -> pd.Series:
     """Monthly trading cost as a fraction of $1 per leg: sum_i traded_i x cost_i.
 

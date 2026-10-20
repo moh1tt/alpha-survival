@@ -6,6 +6,7 @@ from alpha_survival.models import TARGET
 from alpha_survival.portfolio import (
     assign_legs,
     breakeven_cost_bps,
+    estimated_spread_bps,
     leg_weights,
     long_short_returns,
     max_drawdown,
@@ -178,6 +179,46 @@ def test_per_stock_trading_cost_by_hand():
     # Jan: $1 of A at 10 bp + $1 of B at 40 bp. Feb: buy C at 30 bp; selling A has
     # no Feb cost on record, so it pays that month's worst (40 bp).
     assert costs.tolist() == pytest.approx([0.0050, 0.0070])
+
+
+def spread_panel(month="2020-01-31", ar_sum=(0.0005, 0.0015, 2.5e-6, 2.5e-6), caps=(1, 2, 3, 4)):
+    return pd.DataFrame(
+        {
+            "permaticker": ["a", "b", "c", "d"],
+            "month_end": pd.Timestamp(month),
+            "market_cap": list(caps),
+            "ar_n": 10,
+            "ar_sum": list(ar_sum),
+        }
+    )
+
+
+def test_estimated_spread_pools_each_size_group_by_hand():
+    out = estimated_spread_bps(spread_panel(), n_groups=2).set_index("permaticker")
+    assert out["size_group"].tolist() == [1, 1, 2, 2]
+    # Small group: (0.0005 + 0.0015) / 20 pairs = 1e-4 -> S = sqrt(4e-4) = 2%, half = 100 bp.
+    # Pooled, not an average of each stock's own spread (which would give ~96.5 bp).
+    assert out.loc[["a", "b"], "cost_bps"].tolist() == pytest.approx([100.0, 100.0])
+    # Large group: 5e-6 / 20 = 2.5e-7 -> S = 0.1%, half = 5 bp.
+    assert out.loc[["c", "d"], "cost_bps"].tolist() == pytest.approx([5.0, 5.0])
+
+
+def test_estimated_spread_floors_negative_and_skips_missing_caps():
+    panel = spread_panel(ar_sum=(-0.001, -0.001, 1e-6, 1e-6), caps=(1, 2, 3, np.nan))
+    out = estimated_spread_bps(panel, n_groups=2).set_index("permaticker")
+    assert "d" not in out.index
+    assert out.loc["a", "cost_bps"] == 0.0
+
+
+def test_estimated_spread_uses_only_its_own_month():
+    # Leakage check: February's prices cannot change January's cost.
+    jan = spread_panel()
+    feb = spread_panel("2020-02-29")
+    feb_wild = spread_panel("2020-02-29", ar_sum=(9.0, 9.0, 9.0, 9.0), caps=(4, 3, 2, 1))
+    a = estimated_spread_bps(pd.concat([jan, feb]), n_groups=2)
+    b = estimated_spread_bps(pd.concat([jan, feb_wild]), n_groups=2)
+    first = a["month_end"] == pd.Timestamp("2020-01-31")
+    assert a[first]["cost_bps"].tolist() == b[first]["cost_bps"].tolist()
 
 
 def test_net_returns_by_hand():
