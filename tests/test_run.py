@@ -138,6 +138,8 @@ def test_portfolio_table_covers_ols_and_every_signal_both_weightings():
     assert set(PUBLISHED_SIGN) == set(RAW_FEATURES)  # every feature has a published sign
     assert set(table["portfolio"]) == {"ols", "lgbm"} | {f"signal_{c}" for c in RAW_FEATURES}
     assert (table.groupby("portfolio")["weighting"].apply(set) == {"equal", "value"}).all()
+    combos = table.groupby(["portfolio", "weighting"])["legs"].apply(set)
+    assert (combos == {"decile", "band"}).all()
     assert table["sharpe"].notna().all()
     report = render_portfolios(table)
     assert "GROSS of costs" in report and "NET of costs" in report
@@ -164,9 +166,10 @@ def test_signal_portfolios_trade_the_published_direction():
     forecasts = {}
     run_all(panel, keep=forecasts, min_train=12)
     vol = forecasts["signal_vol_3m"]
-    table = portfolio_table({"signal_vol_3m": vol}, panel).set_index("weighting")
+    table = portfolio_table({"signal_vol_3m": vol}, panel)
+    table = table[table["legs"] == "decile"].set_index("weighting")
     flipped = portfolio_table({"signal_vol_3m": vol.assign(pred=-vol["pred"])}, panel)
-    flipped = flipped.set_index("weighting")
+    flipped = flipped[flipped["legs"] == "decile"].set_index("weighting")
     assert table.loc["equal", "direction"] == "low"
     assert table.loc["equal", "ann_return"] == pytest.approx(-flipped.loc["equal", "ann_return"])
 
@@ -176,12 +179,13 @@ def test_selection_table_deflates_every_portfolio_by_the_honest_trial_count():
     forecasts, net = {}, {}
     run_all(panel, keep=forecasts, min_train=12)
     portfolio_table(forecasts, panel, keep_net=net)
-    assert len(net) == 18  # 9 portfolios x 2 weightings
+    assert len(net) == 36  # 9 portfolios x 2 weightings x 2 leg rules
     table = selection_table(net)
-    honest = f"dsr_n{18 + UNREPORTED_TRIALS}"
+    honest = f"dsr_n{36 + UNREPORTED_TRIALS}"
     assert list(table.columns) == [
         "portfolio",
         "weighting",
+        "legs",
         "sharpe_net_est",
         "psr",
         "dsr_n10",
@@ -195,7 +199,7 @@ def test_selection_table_deflates_every_portfolio_by_the_honest_trial_count():
     probs = table[["psr", "dsr_n10", honest, "dsr_n50"]]
     assert ((probs >= 0) & (probs <= 1)).all().all()
     report = render_selection(table, net)
-    assert "deflated Sharpe" in report and f"Trials: {18 + UNREPORTED_TRIALS}" in report
+    assert "deflated Sharpe" in report and f"Trials: {36 + UNREPORTED_TRIALS}" in report
 
 
 def test_selection_table_sharpe_matches_the_net_table():
@@ -203,7 +207,7 @@ def test_selection_table_sharpe_matches_the_net_table():
     forecasts, net = {}, {}
     run_all(panel, keep=forecasts, min_train=12)
     portfolios = portfolio_table(forecasts, panel, keep_net=net)
-    keys = ["portfolio", "weighting"]
+    keys = ["portfolio", "weighting", "legs"]
     merged = portfolios.merge(selection_table(net), on=keys, suffixes=("", "_sel"))
     # Same returns; the selection table uses population std (ddof=0), so close, not equal.
     assert merged["sharpe_net_est_sel"].to_numpy() == pytest.approx(

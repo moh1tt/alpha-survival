@@ -43,6 +43,7 @@ from alpha_survival.models import (
     ZeroForecast,
 )
 from alpha_survival.portfolio import (
+    EXIT_GROUPS,
     WEIGHTINGS,
     breakeven_cost_bps,
     estimated_spread_bps,
@@ -247,23 +248,27 @@ def run_all(
 
 # Models whose forecasts carry the directions they learned in training.
 LEARNED = {"ols", "lgbm"}
+# How legs are formed: plain deciles every month, or a holding band (enter in the
+# top/bottom decile, sell once out of the top/bottom EXIT_GROUPS deciles).
+LEG_RULES = {"decile": None, "band": EXIT_GROUPS}
 
 
 def portfolio_table(
     oos_by_model: dict[str, pd.DataFrame],
     panel: pd.DataFrame,
-    keep_net: dict[tuple[str, str], pd.Series] | None = None,
+    keep_net: dict[tuple[str, str, str], pd.Series] | None = None,
 ) -> pd.DataFrame:
-    """Decile long-short performance for OLS, LightGBM and each signal, EW and VW.
+    """Long-short performance for OLS, LightGBM and each signal: EW and VW, each
+    with plain decile legs and with a holding band (`LEG_RULES`).
 
     Gross stats, plus average turnover, net Sharpe at each flat `COST_BPS` and at
     each stock's estimated spread (`estimated_spread_bps`), all with the
     `BORROW_BPS_PA` short fee, and the break-even trading cost. Signals trade their
     published direction (`PUBLISHED_SIGN`); forecasts of learned models (`LEARNED`)
-    already carry the directions they learned in training. Value weights use market cap at formation
-    (month_end), known when the trade is placed. If `keep_net` is given, each
-    portfolio's monthly returns net of estimated costs are stored in it by
-    (portfolio, weighting).
+    already carry the directions they learned in training. Value weights use market
+    cap at formation (month_end), known when the trade is placed. If `keep_net` is
+    given, each portfolio's monthly returns net of estimated costs are stored in it
+    by (portfolio, weighting, legs).
     """
     caps = panel[["permaticker", "month_end", "market_cap"]]
     spread = estimated_spread_bps(panel).set_index(["permaticker", "month_end"])["cost_bps"]
@@ -278,38 +283,40 @@ def portfolio_table(
         oos = oos.assign(pred=sign * oos["pred"])
         direction = "learned" if name in LEARNED else ("high" if sign > 0 else "low")
         for weighting in WEIGHTINGS:
-            ls = long_short_returns(oos, weighting=weighting)
-            gross = ls["long_short"]
-            weights = leg_weights(oos, weighting=weighting)
-            trade_rows, to = trades(weights), turnover(weights)
-            net = {}
-            for c in COST_BPS:
-                net_ret = net_returns(gross, trading_costs(trade_rows, c), BORROW_BPS_PA)
-                net[f"sharpe_net_{c}bps"] = summarise(net_ret)["sharpe"]
-            est_cost = trading_costs(trade_rows, spread).reindex(gross.index)
-            net_est = net_returns(gross, est_cost, BORROW_BPS_PA)
-            net["sharpe_net_est"] = summarise(net_est)["sharpe"]
-            if keep_net is not None:
-                keep_net[(name, weighting)] = net_est
-            # Average cost paid per dollar traded: what the estimated spreads amount to.
-            net["avg_cost_bps"] = float(est_cost.sum() / to.reindex(gross.index).sum() * 1e4)
-            rows.append(
-                {
-                    "portfolio": name,
-                    "direction": direction,
-                    "weighting": weighting,
-                    **summarise(gross),
-                    "avg_stocks_per_leg": float(ls[["n_long", "n_short"]].mean().mean()),
-                    "avg_turnover": float(to.reindex(gross.index).mean()),
-                    **net,
-                    "breakeven_bps": breakeven_cost_bps(gross, to, BORROW_BPS_PA),
-                }
-            )
+            for legs, exit_groups in LEG_RULES.items():
+                ls = long_short_returns(oos, weighting=weighting, exit_groups=exit_groups)
+                gross = ls["long_short"]
+                weights = leg_weights(oos, weighting=weighting, exit_groups=exit_groups)
+                trade_rows, to = trades(weights), turnover(weights)
+                net = {}
+                for c in COST_BPS:
+                    net_ret = net_returns(gross, trading_costs(trade_rows, c), BORROW_BPS_PA)
+                    net[f"sharpe_net_{c}bps"] = summarise(net_ret)["sharpe"]
+                est_cost = trading_costs(trade_rows, spread).reindex(gross.index)
+                net_est = net_returns(gross, est_cost, BORROW_BPS_PA)
+                net["sharpe_net_est"] = summarise(net_est)["sharpe"]
+                if keep_net is not None:
+                    keep_net[(name, weighting, legs)] = net_est
+                # Average cost paid per dollar traded: what the estimated spreads amount to.
+                net["avg_cost_bps"] = float(est_cost.sum() / to.reindex(gross.index).sum() * 1e4)
+                rows.append(
+                    {
+                        "portfolio": name,
+                        "direction": direction,
+                        "weighting": weighting,
+                        "legs": legs,
+                        **summarise(gross),
+                        "avg_stocks_per_leg": float(ls[["n_long", "n_short"]].mean().mean()),
+                        "avg_turnover": float(to.reindex(gross.index).mean()),
+                        **net,
+                        "breakeven_bps": breakeven_cost_bps(gross, to, BORROW_BPS_PA),
+                    }
+                )
     return pd.DataFrame(rows)
 
 
 def render_portfolios(table: pd.DataFrame) -> str:
-    keys = ["portfolio", "direction", "weighting"]
+    keys = ["portfolio", "direction", "weighting", "legs"]
     gross_digits = {
         "ann_return": 4,
         "ann_vol": 4,
@@ -348,6 +355,10 @@ def render_portfolios(table: pd.DataFrame) -> str:
             "the signs they learned in each training window.",
             "- `equal`: every stock the same weight; `value`: weighted by market cap at "
             "formation. A big gap means the edge lives in small, costly-to-trade stocks.",
+            "- `legs`: `decile` re-forms both legs from scratch each month; `band` buys "
+            "into the top (bottom) 10% but only sells once a stock leaves the top (bottom) "
+            f"{10 * EXIT_GROUPS}%, so names near the cut-off stop flipping in and out "
+            "(buy/hold spread, Novy-Marx & Velikov 2016). Band fixed in advance, not tuned.",
             "- `ann_return` = 12 x mean monthly; `sharpe` = mean / std x sqrt(12); `nw_t_stat` "
             "of the mean monthly return; `max_drawdown` of $1 compounded.",
             "",
@@ -384,13 +395,13 @@ def honest_trials(n_portfolios: int) -> int:
     return n_portfolios + UNREPORTED_TRIALS
 
 
-def monthly_sharpes(net: dict[tuple[str, str], pd.Series]) -> tuple[dict, float]:
+def monthly_sharpes(net: dict[tuple[str, str, str], pd.Series]) -> tuple[dict, float]:
     """Per-month Sharpe of each portfolio, and their variance across portfolios."""
     sharpes = {k: float(r.mean() / r.std(ddof=0)) for k, r in net.items()}
     return sharpes, float(np.var(list(sharpes.values()), ddof=1))
 
 
-def selection_table(net: dict[tuple[str, str], pd.Series]) -> pd.DataFrame:
+def selection_table(net: dict[tuple[str, str, str], pd.Series]) -> pd.DataFrame:
     """Does each net-of-cost Sharpe survive having tried this many portfolios?
 
     Sharpes are per month here, as the formulas need. The variance across trials is
@@ -401,11 +412,12 @@ def selection_table(net: dict[tuple[str, str], pd.Series]) -> pd.DataFrame:
     sharpes, variance = monthly_sharpes(net)
     trials = sorted({honest_trials(len(net)), *SENSITIVITY_TRIALS})
     rows = []
-    for (name, weighting), r in net.items():
+    for (name, weighting, legs), r in net.items():
         row = {
             "portfolio": name,
             "weighting": weighting,
-            "sharpe_net_est": sharpes[(name, weighting)] * np.sqrt(12),
+            "legs": legs,
+            "sharpe_net_est": sharpes[(name, weighting, legs)] * np.sqrt(12),
             "psr": probabilistic_sharpe_ratio(r),
         }
         row |= {f"dsr_n{n}": deflated_sharpe_ratio(r, n, variance) for n in trials}
@@ -414,7 +426,7 @@ def selection_table(net: dict[tuple[str, str], pd.Series]) -> pd.DataFrame:
     return table.reset_index(drop=True)
 
 
-def render_selection(table: pd.DataFrame, net: dict[tuple[str, str], pd.Series]) -> str:
+def render_selection(table: pd.DataFrame, net: dict[tuple[str, str, str], pd.Series]) -> str:
     n = honest_trials(len(net))
     _, variance = monthly_sharpes(net)
     bar = expected_max_sharpe(n, variance) * np.sqrt(12)
@@ -432,7 +444,8 @@ def render_selection(table: pd.DataFrame, net: dict[tuple[str, str], pd.Series])
             "",
             f"- Trials: {n} = the {len(net)} portfolios above plus {UNREPORTED_TRIALS} "
             "variants tried but not built (ridge and rolling-window OLS, each equal- or "
-            "value-weighted). Every row is judged against the same bar, since any of "
+            "value-weighted). Every portfolio counts twice, plain and banded: the band is a "
+            "second try at the same idea. Every row is judged against the same bar, since any of "
             "them could have been the one we picked.",
             f"- Luck bar: with {n} skill-less trials whose Sharpes spread as ours do "
             f"(std {np.sqrt(variance * 12):.2f} annualised), the best would show a Sharpe "
@@ -499,7 +512,7 @@ def main(argv: list[str] | None = None) -> None:
     forecasts: dict[str, pd.DataFrame] = {}
     table = run_all(panel, keep=forecasts)
     print(table.to_string(index=False))
-    net: dict[tuple[str, str], pd.Series] = {}
+    net: dict[tuple[str, str, str], pd.Series] = {}
     portfolios = portfolio_table(forecasts, panel, keep_net=net)
     print(portfolios.to_string(index=False))
     selection = selection_table(net)
