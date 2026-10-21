@@ -3,7 +3,7 @@
 **Real data (Sharadar US equities), out-of-sample, walk-forward. No transaction costs; not a trading result.**
 
 - Panel: investable rows (price >= $5 at month end), 1997-12 to 2026-09, 1,362,457 stock-months, 16,118 stocks.
-- Models: `zero` and `hist_mean` (pooled training mean) baselines; raw signals `mom_12_1` (12-1 momentum), `log_mcap` (log size) and `bm` (book-to-market: latest filed USD book equity / month-end market cap, NaN if book <= 0) and `rev_1m` (this month's return, short-term reversal; expect a NEGATIVE IC) and `gp_a` (gross profit / total assets, NaN where cost of revenue is 0) and `asset_growth` (assets vs. 12 months earlier; expect a NEGATIVE IC) and `vol_3m` (std of daily returns over the last 3 months; expect a NEGATIVE IC); `ols` and `ridge` (alpha=1, untuned) on all seven rank-normalised to [-1, 1] each month.
+- Models: `zero` and `hist_mean` (pooled training mean) baselines; raw signals `mom_12_1` (12-1 momentum), `log_mcap` (log size) and `bm` (book-to-market: latest filed USD book equity / month-end market cap, NaN if book <= 0) and `rev_1m` (this month's return, short-term reversal; expect a NEGATIVE IC) and `gp_a` (gross profit / total assets, NaN where cost of revenue is 0) and `asset_growth` (assets vs. 12 months earlier; expect a NEGATIVE IC) and `vol_3m` (std of daily returns over the last 3 months; expect a NEGATIVE IC); `ols` and `ridge` (alpha=1, untuned) on all seven rank-normalised to [-1, 1] each month; `lgbm` (LightGBM gradient-boosted trees, fixed untuned settings: depth 4, 200 trees, learning rate 0.05, each leaf >= 0.1% of training rows) on the same seven, so it can pick up nonlinear effects and interactions.
 - Splits: first 60 months train only, 12-month test blocks, model refit at the start of each block, horizon 1, embargo 0. `window`: `expanding` trains on all months so far; `rolling 60m` on the latest 60 only. Both start testing in the same month.
 - `oos_r2_pct`: pooled R^2 vs. a zero forecast, in percent (Gu, Kelly & Xiu 2020). Blank for raw signals, whose scale is not a return.
 - `mean_ic`: average monthly Spearman rank correlation of forecast with next-month return; months with < 10 stocks skipped. Blank for constant forecasts. `signal_log_mcap` is log size, so a small-firm premium shows as a NEGATIVE IC.
@@ -22,6 +22,7 @@
 | signal_vol_3m | expanding | 2002-12-31 | 2026-09-30 | 1,044,254 |  | -0.0439 | -4.44 | -4.84 | -0.04 | 0.386 | 285 |
 | ols | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.128 | 0.0314 | 5.33 | 5.21 | 0.04 | 0.681 | 285 |
 | ridge | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.128 | 0.0314 | 5.33 | 5.21 | 0.04 | 0.681 | 285 |
+| lgbm | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.182 | 0.0306 | 7.03 | 7.25 | -0.04 | 0.681 | 285 |
 | hist_mean | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.192 |  |  |  |  |  | 0 |
 | ols | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.325 | 0.0248 | 3.96 | 4.13 | 0.01 | 0.600 | 285 |
 
@@ -30,7 +31,7 @@
 **Real data, out-of-sample. No trading or borrowing costs yet: an upper bound, not achievable returns.**
 
 - Each month: long the top 10% of stocks by forecast, short the bottom 10%, hold one month. Return = long leg - short leg (the short funds the long).
-- `direction`: signals trade the sign their original paper published (`high` = buy high values), never the sign seen in our test period; `ols` uses the signs it learned in each training window.
+- `direction`: signals trade the sign their original paper published (`high` = buy high values), never the sign seen in our test period; `ols` and `lgbm` use the signs they learned in each training window.
 - `equal`: every stock the same weight; `value`: weighted by market cap at formation. A big gap means the edge lives in small, costly-to-trade stocks.
 - `ann_return` = 12 x mean monthly; `sharpe` = mean / std x sqrt(12); `nw_t_stat` of the mean monthly return; `max_drawdown` of $1 compounded.
 
@@ -38,6 +39,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | ols | learned | equal | 0.1049 | 0.1484 | 0.71 | 3.11 | -0.448 | 0.642 | 285 | 369 |
 | ols | learned | value | 0.0488 | 0.1785 | 0.27 | 1.16 | -0.481 | 0.554 | 285 | 364 |
+| lgbm | learned | equal | 0.1609 | 0.1239 | 1.30 | 5.28 | -0.279 | 0.712 | 285 | 370 |
+| lgbm | learned | value | 0.0824 | 0.2279 | 0.36 | 1.63 | -0.597 | 0.589 | 285 | 353 |
 | signal_mom_12_1 | high | equal | 0.0744 | 0.1838 | 0.40 | 1.90 | -0.658 | 0.625 | 285 | 343 |
 | signal_mom_12_1 | high | value | 0.1053 | 0.2664 | 0.40 | 2.00 | -0.596 | 0.596 | 285 | 336 |
 | signal_log_mcap | low | equal | -0.0621 | 0.1015 | -0.61 | -2.85 | -0.845 | 0.453 | 285 | 354 |
@@ -66,6 +69,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | ols | learned | equal | 1.74 | 0.71 | 0.53 | 0.39 | -0.03 | 39 | 0.13 | 48 |
 | ols | learned | value | 1.86 | 0.27 | 0.12 | -0.01 | -0.38 | 17 | 0.03 | 20 |
+| lgbm | learned | equal | 2.09 | 1.30 | 1.06 | 0.85 | 0.25 | 49 | 0.26 | 62 |
+| lgbm | learned | value | 2.25 | 0.36 | 0.22 | 0.10 | -0.25 | 21 | 0.09 | 29 |
 | signal_mom_12_1 | high | equal | 1.34 | 0.40 | 0.29 | 0.20 | -0.06 | 42 | 0.01 | 43 |
 | signal_mom_12_1 | high | value | 1.50 | 0.40 | 0.31 | 0.24 | 0.04 | 19 | 0.25 | 56 |
 | signal_log_mcap | low | equal | 0.38 | -0.61 | -0.71 | -0.75 | -0.89 | 68 | -0.97 | -146 |
@@ -85,16 +90,18 @@
 
 **Real data, out-of-sample, net of estimated costs. Asks whether the best portfolio beats what luck alone would give the best of many tries.**
 
-- Trials: 20 = the 16 portfolios above plus 4 variants tried but not built (ridge and rolling-window OLS, each equal- or value-weighted). Every row is judged against the same bar, since any of them could have been the one we picked.
-- Luck bar: with 20 skill-less trials whose Sharpes spread as ours do (std 0.47 annualised), the best would show a Sharpe of about 0.89 by chance (Bailey & Lopez de Prado 2014).
-- `psr`: probability the true Sharpe is above 0, allowing for skew and fat tails (Bailey & Lopez de Prado 2012). `dsr_nN`: probability it is above the luck bar for N trials. `dsr_n20` is the honest count; the others show how much the verdict depends on N. Above 0.95: survives selection.
+- Trials: 22 = the 18 portfolios above plus 4 variants tried but not built (ridge and rolling-window OLS, each equal- or value-weighted). Every row is judged against the same bar, since any of them could have been the one we picked.
+- Luck bar: with 22 skill-less trials whose Sharpes spread as ours do (std 0.46 annualised), the best would show a Sharpe of about 0.89 by chance (Bailey & Lopez de Prado 2014).
+- `psr`: probability the true Sharpe is above 0, allowing for skew and fat tails (Bailey & Lopez de Prado 2012). `dsr_nN`: probability it is above the luck bar for N trials. `dsr_n22` is the honest count; the others show how much the verdict depends on N. Above 0.95: survives selection.
 
-| portfolio | weighting | sharpe_net_est | psr | dsr_n10 | dsr_n20 | dsr_n50 |
+| portfolio | weighting | sharpe_net_est | psr | dsr_n10 | dsr_n22 | dsr_n50 |
 | --- | --- | --- | --- | --- | --- | --- |
-| signal_gp_a | value | 0.58 | 0.998 | 0.221 | 0.064 | 0.008 |
-| signal_gp_a | equal | 0.56 | 0.997 | 0.183 | 0.049 | 0.006 |
-| signal_mom_12_1 | value | 0.25 | 0.881 | 0.010 | 0.001 | 0.000 |
-| ols | equal | 0.13 | 0.731 | 0.002 | 0.000 | 0.000 |
+| signal_gp_a | value | 0.58 | 0.998 | 0.251 | 0.067 | 0.012 |
+| signal_gp_a | equal | 0.56 | 0.997 | 0.210 | 0.051 | 0.008 |
+| lgbm | equal | 0.26 | 0.893 | 0.015 | 0.001 | 0.000 |
+| signal_mom_12_1 | value | 0.25 | 0.881 | 0.012 | 0.001 | 0.000 |
+| ols | equal | 0.13 | 0.731 | 0.003 | 0.000 | 0.000 |
+| lgbm | value | 0.09 | 0.670 | 0.001 | 0.000 | 0.000 |
 | ols | value | 0.03 | 0.557 | 0.000 | 0.000 | 0.000 |
 | signal_mom_12_1 | equal | 0.01 | 0.516 | 0.000 | 0.000 | 0.000 |
 | signal_vol_3m | value | -0.08 | 0.341 | 0.000 | 0.000 | 0.000 |

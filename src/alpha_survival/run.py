@@ -37,6 +37,7 @@ from alpha_survival.metrics import (
 from alpha_survival.models import (
     Forecaster,
     HistoricalMean,
+    LGBMForecaster,
     SignalForecast,
     SklearnForecaster,
     ZeroForecast,
@@ -102,6 +103,7 @@ def baseline_models() -> list[Forecaster]:
         SignalForecast("vol_3m"),
         SklearnForecaster(LinearRegression(), FEATURES, "ols"),
         SklearnForecaster(Ridge(alpha=1.0), FEATURES, "ridge"),
+        LGBMForecaster(FEATURES),
     ]
 
 
@@ -208,7 +210,9 @@ def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
             "`asset_growth` (assets vs. 12 months earlier; expect a NEGATIVE IC) and "
             "`vol_3m` (std of daily returns over the last 3 months; expect a NEGATIVE IC); "
             "`ols` and `ridge` (alpha=1, untuned) on all seven rank-normalised to [-1, 1] "
-            "each month.",
+            "each month; `lgbm` (LightGBM gradient-boosted trees, fixed untuned settings: "
+            "depth 4, 200 trees, learning rate 0.05, each leaf >= 0.1% of training rows) "
+            "on the same seven, so it can pick up nonlinear effects and interactions.",
             "- Splits: first 60 months train only, 12-month test blocks, model refit at the "
             "start of each block, horizon 1, embargo 0. `window`: `expanding` trains on all "
             f"months so far; `rolling {ROLLING_WINDOW}m` on the latest {ROLLING_WINDOW} only. "
@@ -241,32 +245,38 @@ def run_all(
     return pd.concat([expanding, rolling], ignore_index=True)
 
 
+# Models whose forecasts carry the directions they learned in training.
+LEARNED = {"ols", "lgbm"}
+
+
 def portfolio_table(
     oos_by_model: dict[str, pd.DataFrame],
     panel: pd.DataFrame,
     keep_net: dict[tuple[str, str], pd.Series] | None = None,
 ) -> pd.DataFrame:
-    """Decile long-short performance for OLS and each signal, EW and VW.
+    """Decile long-short performance for OLS, LightGBM and each signal, EW and VW.
 
     Gross stats, plus average turnover, net Sharpe at each flat `COST_BPS` and at
     each stock's estimated spread (`estimated_spread_bps`), all with the
     `BORROW_BPS_PA` short fee, and the break-even trading cost. Signals trade their
-    published direction (`PUBLISHED_SIGN`); OLS's forecast already carries the
-    directions it learned in training. Value weights use market cap at formation
+    published direction (`PUBLISHED_SIGN`); forecasts of learned models (`LEARNED`)
+    already carry the directions they learned in training. Value weights use market cap at formation
     (month_end), known when the trade is placed. If `keep_net` is given, each
     portfolio's monthly returns net of estimated costs are stored in it by
     (portfolio, weighting).
     """
     caps = panel[["permaticker", "month_end", "market_cap"]]
     spread = estimated_spread_bps(panel).set_index(["permaticker", "month_end"])["cost_bps"]
-    candidates = [("ols", 1)] + [(f"signal_{c}", sign) for c, sign in PUBLISHED_SIGN.items()]
+    candidates = [("ols", 1), ("lgbm", 1)] + [
+        (f"signal_{c}", sign) for c, sign in PUBLISHED_SIGN.items()
+    ]
     rows = []
     for name, sign in candidates:
         if name not in oos_by_model:
             continue
         oos = oos_by_model[name].merge(caps, on=["permaticker", "month_end"], how="left")
         oos = oos.assign(pred=sign * oos["pred"])
-        direction = "learned" if name == "ols" else ("high" if sign > 0 else "low")
+        direction = "learned" if name in LEARNED else ("high" if sign > 0 else "low")
         for weighting in WEIGHTINGS:
             ls = long_short_returns(oos, weighting=weighting)
             gross = ls["long_short"]
@@ -334,8 +344,8 @@ def render_portfolios(table: pd.DataFrame) -> str:
             "- Each month: long the top 10% of stocks by forecast, short the bottom 10%, hold "
             "one month. Return = long leg - short leg (the short funds the long).",
             "- `direction`: signals trade the sign their original paper published (`high` = "
-            "buy high values), never the sign seen in our test period; `ols` uses the signs "
-            "it learned in each training window.",
+            "buy high values), never the sign seen in our test period; `ols` and `lgbm` use "
+            "the signs they learned in each training window.",
             "- `equal`: every stock the same weight; `value`: weighted by market cap at "
             "formation. A big gap means the edge lives in small, costly-to-trade stocks.",
             "- `ann_return` = 12 x mean monthly; `sharpe` = mean / std x sqrt(12); `nw_t_stat` "

@@ -74,6 +74,7 @@ def test_evaluate_scores_each_model_the_right_way():
         "signal_vol_3m",
         "ols",
         "ridge",
+        "lgbm",
     ]
 
     assert table.loc["zero", "oos_r2_pct"] == 0.0  # the benchmark scores exactly 0
@@ -84,7 +85,7 @@ def test_evaluate_scores_each_model_the_right_way():
     assert table.loc[signals, "oos_r2_pct"].isna().all()
     assert table.loc[signals, "ic_months"].gt(0).all()
     # Learned models forecast returns AND order stocks: both metrics.
-    assert table.loc[["ols", "ridge"], ["oos_r2_pct", "mean_ic"]].notna().all().all()
+    assert table.loc[["ols", "ridge", "lgbm"], ["oos_r2_pct", "mean_ic"]].notna().all().all()
     assert (table["first_test_month"] == MONTHS[12].date()).all()
 
 
@@ -135,7 +136,7 @@ def test_portfolio_table_covers_ols_and_every_signal_both_weightings():
     run_all(panel, keep=forecasts, min_train=12)
     table = portfolio_table(forecasts, panel)
     assert set(PUBLISHED_SIGN) == set(RAW_FEATURES)  # every feature has a published sign
-    assert set(table["portfolio"]) == {"ols"} | {f"signal_{c}" for c in RAW_FEATURES}
+    assert set(table["portfolio"]) == {"ols", "lgbm"} | {f"signal_{c}" for c in RAW_FEATURES}
     assert (table.groupby("portfolio")["weighting"].apply(set) == {"equal", "value"}).all()
     assert table["sharpe"].notna().all()
     report = render_portfolios(table)
@@ -175,9 +176,9 @@ def test_selection_table_deflates_every_portfolio_by_the_honest_trial_count():
     forecasts, net = {}, {}
     run_all(panel, keep=forecasts, min_train=12)
     portfolio_table(forecasts, panel, keep_net=net)
-    assert len(net) == 16  # 8 portfolios x 2 weightings
+    assert len(net) == 18  # 9 portfolios x 2 weightings
     table = selection_table(net)
-    honest = f"dsr_n{16 + UNREPORTED_TRIALS}"
+    honest = f"dsr_n{18 + UNREPORTED_TRIALS}"
     assert list(table.columns) == [
         "portfolio",
         "weighting",
@@ -194,7 +195,7 @@ def test_selection_table_deflates_every_portfolio_by_the_honest_trial_count():
     probs = table[["psr", "dsr_n10", honest, "dsr_n50"]]
     assert ((probs >= 0) & (probs <= 1)).all().all()
     report = render_selection(table, net)
-    assert "deflated Sharpe" in report and f"Trials: {16 + UNREPORTED_TRIALS}" in report
+    assert "deflated Sharpe" in report and f"Trials: {18 + UNREPORTED_TRIALS}" in report
 
 
 def test_selection_table_sharpe_matches_the_net_table():
