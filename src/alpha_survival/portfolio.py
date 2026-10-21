@@ -5,6 +5,8 @@ decile, hold over month t+1 (so each stock earns its `fwd_ret`). The short pays
 for the long, so the strategy's return is long-leg minus short-leg return.
 `long_short_returns` is GROSS of costs; `turnover` measures how much is traded
 and `net_returns` charges a flat cost per dollar traded plus a short-borrow fee.
+With `exit_groups`, held stocks keep their leg until they leave a wider band,
+which cuts turnover (`assign_legs_banded`).
 """
 
 from __future__ import annotations
@@ -17,6 +19,10 @@ from alpha_survival.models import TARGET
 
 N_GROUPS = 10
 WEIGHTINGS = ("equal", "value")
+# Holding band: enter in the top (bottom) decile, hold until out of the top
+# (bottom) 2 deciles (a buy/hold spread, Novy-Marx & Velikov 2016). Fixed in
+# advance, not tuned on our results.
+EXIT_GROUPS = 2
 
 
 def assign_legs(oos: pd.DataFrame, n_groups: int = N_GROUPS) -> pd.Series:
@@ -37,8 +43,46 @@ def assign_legs(oos: pd.DataFrame, n_groups: int = N_GROUPS) -> pd.Series:
     return leg.rename("leg")
 
 
+def assign_legs_banded(
+    oos: pd.DataFrame, n_groups: int = N_GROUPS, exit_groups: int = EXIT_GROUPS
+) -> pd.Series:
+    """Like `assign_legs`, but a stock already held keeps its leg while it stays in
+    the top (bottom) `exit_groups` of `n_groups`, e.g. enters in the top 10% and
+    is only sold once it falls out of the top 20%.
+
+    Stocks near the cut-off no longer flip in and out every month, so turnover
+    falls; legs hold somewhat more names. Path-dependent, so months are processed
+    in order; each month's legs use only that month's forecasts and the previous
+    month's legs. A stock with no forecast leaves its leg. `exit_groups=1` gives
+    `assign_legs` exactly.
+    """
+    if not 1 <= exit_groups <= n_groups // 2:
+        raise ValueError(f"exit_groups must be in [1, {n_groups // 2}]")
+    leg = pd.Series(np.nan, index=oos.index, name="leg")
+    held_long: set = set()
+    held_short: set = set()
+    for _, month in oos.groupby("month_end", sort=True):
+        rank = month["pred"].rank(method="first")
+        count = rank.count()
+        k = max(count // n_groups, 1)
+        k_exit = max(count * exit_groups // n_groups, k)
+        stock = month["permaticker"]
+        is_long = (rank > count - k) | ((rank > count - k_exit) & stock.isin(held_long))
+        is_short = (rank <= k) | ((rank <= k_exit) & stock.isin(held_short))
+        month_leg = pd.Series(0.0, index=month.index).where(rank.notna())
+        month_leg[is_long] = 1.0
+        month_leg[is_short] = -1.0
+        leg[month.index] = month_leg
+        held_long = set(stock[is_long])
+        held_short = set(stock[is_short])
+    return leg
+
+
 def leg_weights(
-    oos: pd.DataFrame, n_groups: int = N_GROUPS, weighting: str = "equal"
+    oos: pd.DataFrame,
+    n_groups: int = N_GROUPS,
+    weighting: str = "equal",
+    exit_groups: int | None = None,
 ) -> pd.DataFrame:
     """One row per held stock-month: month_end, permaticker, leg, weight, fwd_ret.
 
@@ -46,14 +90,19 @@ def leg_weights(
     `market_cap` at formation (known at month_end). Weights sum to 1 within each
     leg and month, so the portfolio is $1 long and $1 short. Stocks with a missing
     `fwd_ret` (data gap, end of sample) drop out of their leg after legs are set:
-    a small bias, since a real holder would have earned something.
+    a small bias, since a real holder would have earned something. With
+    `exit_groups`, legs come from `assign_legs_banded` instead of `assign_legs`.
     """
     if weighting not in WEIGHTINGS:
         raise ValueError(f"weighting must be one of {WEIGHTINGS}")
     if weighting == "value" and "market_cap" not in oos.columns:
         raise KeyError("value weighting needs a market_cap column")
 
-    rows = oos.assign(leg=assign_legs(oos, n_groups))
+    if exit_groups is None:
+        legs = assign_legs(oos, n_groups)
+    else:
+        legs = assign_legs_banded(oos, n_groups, exit_groups)
+    rows = oos.assign(leg=legs)
     rows = rows[rows["leg"].isin([1, -1])].dropna(subset=[TARGET])
     if weighting == "value":
         rows = rows[rows["market_cap"] > 0]
@@ -66,7 +115,10 @@ def leg_weights(
 
 
 def long_short_returns(
-    oos: pd.DataFrame, n_groups: int = N_GROUPS, weighting: str = "equal"
+    oos: pd.DataFrame,
+    n_groups: int = N_GROUPS,
+    weighting: str = "equal",
+    exit_groups: int | None = None,
 ) -> pd.DataFrame:
     """Monthly returns of the top-minus-bottom portfolio (see `assign_legs`).
 
@@ -74,7 +126,7 @@ def long_short_returns(
     n_long, n_short; indexed by formation month. Months missing either leg are
     left out.
     """
-    rows = leg_weights(oos, n_groups, weighting)
+    rows = leg_weights(oos, n_groups, weighting, exit_groups)
     rows = rows.assign(w_ret=rows["weight"] * rows[TARGET])
     legs = rows.groupby(["month_end", "leg"]).agg(w_ret=("w_ret", "sum"), n=("weight", "size"))
     leg_ret = legs["w_ret"].unstack("leg")

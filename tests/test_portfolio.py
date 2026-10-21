@@ -5,6 +5,7 @@ import pytest
 from alpha_survival.models import TARGET
 from alpha_survival.portfolio import (
     assign_legs,
+    assign_legs_banded,
     breakeven_cost_bps,
     estimated_spread_bps,
     leg_weights,
@@ -264,3 +265,90 @@ def test_summarise_by_hand():
     assert s["hit_rate"] == 0.5 and s["n_months"] == 4
     with pytest.raises(ValueError):
         summarise(pd.Series([0.1]))
+
+
+TEN = [f"S{i}" for i in range(10)]
+
+
+def ten_stocks(month, order):
+    """10 stocks; `order` lists names from highest forecast to lowest."""
+    pred = {name: 10.0 - i for i, name in enumerate(order)}
+    return stocks_oos(month, TEN, [pred[n] for n in TEN], [0.0] * 10)
+
+
+def banded_legs(months):
+    oos = pd.concat(months, ignore_index=True)
+    legs = oos.assign(leg=assign_legs_banded(oos, n_groups=10, exit_groups=2))
+    return {
+        m: (set(g.loc[g["leg"] == 1, "permaticker"]), set(g.loc[g["leg"] == -1, "permaticker"]))
+        for m, g in legs.groupby("month_end")
+    }
+
+
+def test_banded_legs_hold_until_the_stock_leaves_the_band():
+    # 10 stocks: enter in the top/bottom 1, hold while in the top/bottom 2.
+    jan = ten_stocks("2020-01-31", TEN)  # S0 best, S9 worst
+    feb = ten_stocks("2020-02-29", ["S1", "S0", *TEN[2:8], "S9", "S8"])  # S0, S9 slip a place
+    mar = ten_stocks("2020-03-31", ["S1", "S2", "S0", *TEN[3:8], "S9", "S8"])  # S0 drops to 3rd
+    legs = banded_legs([jan, feb, mar])
+    assert legs[pd.Timestamp("2020-01-31")] == ({"S0"}, {"S9"})
+    assert legs[pd.Timestamp("2020-02-29")] == ({"S1", "S0"}, {"S8", "S9"})  # held in the band
+    assert legs[pd.Timestamp("2020-03-31")] == ({"S1"}, {"S8", "S9"})  # S0 out of the band
+
+
+def test_banded_legs_new_stocks_enter_only_at_the_top():
+    jan = ten_stocks("2020-01-31", TEN)
+    # S0 falls to the middle; S2 is now 2nd: inside the band, but never held, so not bought.
+    feb = ten_stocks("2020-02-29", ["S1", "S2", "S3", "S4", "S0", *TEN[5:]])
+    assert banded_legs([jan, feb])[pd.Timestamp("2020-02-29")][0] == {"S1"}
+
+
+def test_banded_legs_drop_a_stock_with_no_forecast():
+    jan = ten_stocks("2020-01-31", TEN)
+    feb = ten_stocks("2020-02-29", ["S1", "S0", *TEN[2:]])
+    feb.loc[feb["permaticker"] == "S0", "pred"] = np.nan
+    oos = pd.concat([jan, feb], ignore_index=True)
+    legs = assign_legs_banded(oos, n_groups=10, exit_groups=2)
+    assert np.isnan(legs[(oos["permaticker"] == "S0") & (oos["month_end"] == "2020-02-29")]).all()
+
+
+def random_panel(n_stocks=50, n_months=24, persistence=0.8, seed=0):
+    """Forecasts that drift month to month, like a slow-moving signal plus noise."""
+    rng = np.random.default_rng(seed)
+    months = pd.date_range("2020-01-31", periods=n_months, freq="ME")
+    signal = rng.normal(size=n_stocks)
+    frames = []
+    for m in months:
+        signal = persistence * signal + np.sqrt(1 - persistence**2) * rng.normal(size=n_stocks)
+        frames.append(stocks_oos(m, list(range(n_stocks)), signal, rng.normal(0, 0.05, n_stocks)))
+    return pd.concat(frames, ignore_index=True)
+
+
+def test_banded_legs_with_one_exit_group_are_plain_deciles():
+    oos = random_panel()
+    assert assign_legs_banded(oos, exit_groups=1).equals(assign_legs(oos))
+
+
+def test_banding_cuts_turnover():
+    # Enough stocks for the band to matter (with 50, each leg is only 5 names).
+    oos = random_panel(n_stocks=500)
+    plain = turnover(leg_weights(oos)).iloc[1:].mean()
+    banded = turnover(leg_weights(oos, exit_groups=2)).iloc[1:].mean()
+    assert banded < 0.8 * plain
+
+
+def test_banded_legs_ignore_future_months():
+    # Leakage check: what happens after month t cannot change month t's legs.
+    oos = random_panel()
+    first = oos["month_end"] <= "2020-12-31"
+    wild = oos.copy()
+    wild.loc[~first, "pred"] = -wild.loc[~first, "pred"]
+    wild.loc[~first, TARGET] = 5.0
+    a = assign_legs_banded(oos)[first]
+    b = assign_legs_banded(wild)[first]
+    assert a.equals(b)
+
+
+def test_banded_legs_bad_band_raises():
+    with pytest.raises(ValueError, match="exit_groups"):
+        assign_legs_banded(random_panel(), n_groups=10, exit_groups=6)
