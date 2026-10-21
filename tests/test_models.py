@@ -7,6 +7,7 @@ from alpha_survival.models import (
     TARGET,
     Forecaster,
     HistoricalMean,
+    LGBMForecaster,
     SignalForecast,
     SklearnForecaster,
     ZeroForecast,
@@ -139,3 +140,45 @@ def test_sklearn_forecaster_rejects_missing_or_nan_features():
         model.fit(gappy)
     with pytest.raises(KeyError, match="'b'"):
         model.fit(linear_rows().drop(columns="b"))
+
+
+def u_shaped_rows(n: int = 5_000, seed: int = 0) -> pd.DataFrame:
+    """fwd_ret depends on a^2: extremes beat the middle, which no straight line captures."""
+    rng = np.random.default_rng(seed)
+    rows = pd.DataFrame({"a": rng.uniform(-1, 1, n), "b": rng.uniform(-1, 1, n)})
+    rows[TARGET] = 0.05 * (rows["a"] ** 2 - 1 / 3) + rng.normal(0, 0.01, n)
+    return rows
+
+
+def test_lgbm_learns_a_nonlinear_effect_ols_cannot():
+    train, test = u_shaped_rows(), u_shaped_rows(seed=1)
+    truth = 0.05 * (test["a"] ** 2 - 1 / 3)
+    lgbm = LGBMForecaster(["a", "b"]).fit(train).predict(features(test))
+    ols = SklearnForecaster(LinearRegression(), ["a", "b"], "ols").fit(train)
+    assert lgbm.name == "lgbm"
+    assert np.corrcoef(lgbm, truth)[0, 1] > 0.95
+    assert abs(np.corrcoef(ols.predict(features(test)), truth)[0, 1]) < 0.1
+
+
+def test_lgbm_min_leaf_scales_with_training_rows():
+    model = LGBMForecaster(["a", "b"])
+    assert model.fit(u_shaped_rows(5_000)).estimator_.get_params()["min_child_samples"] == 20
+    assert model.fit(u_shaped_rows(50_000)).estimator_.get_params()["min_child_samples"] == 50
+    assert model.estimator.get_params()["min_child_samples"] != 50  # template untouched
+
+
+def test_lgbm_refits_are_identical():
+    train, test = u_shaped_rows(), features(u_shaped_rows(seed=1))
+    first = LGBMForecaster(["a", "b"]).fit(train).predict(test)
+    second = LGBMForecaster(["a", "b"]).fit(train).predict(test)
+    assert first.equals(second)
+
+
+def test_lgbm_rejects_nan_features_and_target_in_predict():
+    model = LGBMForecaster(["a", "b"])
+    gappy = u_shaped_rows()
+    gappy.loc[3, "a"] = np.nan
+    with pytest.raises(ValueError, match="NaN"):
+        model.fit(gappy)
+    with pytest.raises(ValueError, match="must not see the target"):
+        model.fit(u_shaped_rows()).predict(u_shaped_rows())

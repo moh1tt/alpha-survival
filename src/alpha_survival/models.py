@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from lightgbm import LGBMRegressor
 from sklearn.base import RegressorMixin, clone
 
 TARGET = "fwd_ret"
@@ -120,3 +121,41 @@ class SklearnForecaster(Forecaster):
         if self.estimator_ is None:
             raise RuntimeError(f"{self.name} must be fit before predict")
         return self.estimator_.predict(self._matrix(rows))
+
+
+# Fixed, conservative settings (not tuned): shallow trees, slow learning, row and
+# column subsampling, all seeded. Deterministic mode makes refits bit-identical.
+LGBM_PARAMS = {
+    "n_estimators": 200,
+    "learning_rate": 0.05,
+    "max_depth": 4,
+    "num_leaves": 15,
+    "subsample": 0.8,
+    "subsample_freq": 1,
+    "colsample_bytree": 0.8,
+    "random_state": 0,
+    "deterministic": True,
+    "force_row_wise": True,
+    "verbose": -1,
+}
+
+
+class LGBMForecaster(SklearnForecaster):
+    """Gradient-boosted trees (LightGBM): can learn nonlinear effects and interactions.
+
+    Every leaf must hold at least `min_leaf_frac` of the training rows (and >= 20),
+    so the guard against fitting noise scales from small early folds to large late
+    ones. Set from the training rows only: no peeking at test months.
+    """
+
+    def __init__(
+        self, features: list[str], name: str = "lgbm", min_leaf_frac: float = 0.001, **params
+    ) -> None:
+        super().__init__(LGBMRegressor(**(LGBM_PARAMS | params)), features, name)
+        self.min_leaf_frac = min_leaf_frac
+
+    def fit(self, train: pd.DataFrame) -> LGBMForecaster:
+        min_leaf = max(20, int(self.min_leaf_frac * len(train)))
+        estimator = clone(self.estimator).set_params(min_child_samples=min_leaf)
+        self.estimator_ = estimator.fit(self._matrix(train), train[TARGET])
+        return self
