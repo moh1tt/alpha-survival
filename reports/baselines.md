@@ -81,6 +81,33 @@
 | signal_vol_3m | low | equal | 1.18 | 0.16 | 0.08 | 0.02 | -0.16 | 48 | -0.14 | 24 |
 | signal_vol_3m | low | value | 1.23 | 0.04 | -0.03 | -0.07 | -0.22 | 22 | -0.08 | 5 |
 
+## Selection bias: deflated Sharpe ratio
+
+**Real data, out-of-sample, net of estimated costs. Asks whether the best portfolio beats what luck alone would give the best of many tries.**
+
+- Trials: 20 = the 16 portfolios above plus 4 variants tried but not built (ridge and rolling-window OLS, each equal- or value-weighted). Every row is judged against the same bar, since any of them could have been the one we picked.
+- Luck bar: with 20 skill-less trials whose Sharpes spread as ours do (std 0.47 annualised), the best would show a Sharpe of about 0.89 by chance (Bailey & Lopez de Prado 2014).
+- `psr`: probability the true Sharpe is above 0, allowing for skew and fat tails (Bailey & Lopez de Prado 2012). `dsr_nN`: probability it is above the luck bar for N trials. `dsr_n20` is the honest count; the others show how much the verdict depends on N. Above 0.95: survives selection.
+
+| portfolio | weighting | sharpe_net_est | psr | dsr_n10 | dsr_n20 | dsr_n50 |
+| --- | --- | --- | --- | --- | --- | --- |
+| signal_gp_a | value | 0.58 | 0.998 | 0.221 | 0.064 | 0.008 |
+| signal_gp_a | equal | 0.56 | 0.997 | 0.183 | 0.049 | 0.006 |
+| signal_mom_12_1 | value | 0.25 | 0.881 | 0.010 | 0.001 | 0.000 |
+| ols | equal | 0.13 | 0.731 | 0.002 | 0.000 | 0.000 |
+| ols | value | 0.03 | 0.557 | 0.000 | 0.000 | 0.000 |
+| signal_mom_12_1 | equal | 0.01 | 0.516 | 0.000 | 0.000 | 0.000 |
+| signal_vol_3m | value | -0.08 | 0.341 | 0.000 | 0.000 | 0.000 |
+| signal_bm | equal | -0.12 | 0.274 | 0.000 | 0.000 | 0.000 |
+| signal_vol_3m | equal | -0.14 | 0.239 | 0.000 | 0.000 | 0.000 |
+| signal_asset_growth | value | -0.22 | 0.147 | 0.000 | 0.000 | 0.000 |
+| signal_bm | value | -0.25 | 0.113 | 0.000 | 0.000 | 0.000 |
+| signal_asset_growth | equal | -0.40 | 0.026 | 0.000 | 0.000 | 0.000 |
+| signal_rev_1m | value | -0.55 | 0.005 | 0.000 | 0.000 | 0.000 |
+| signal_log_mcap | value | -0.81 | 0.000 | 0.000 | 0.000 | 0.000 |
+| signal_rev_1m | equal | -0.95 | 0.000 | 0.000 | 0.000 | 0.000 |
+| signal_log_mcap | equal | -0.97 | 0.000 | 0.000 | 0.000 | 0.000 |
+
 ## Estimated trading cost by company size
 
 **Real data. Half the bid-ask spread (bps per dollar traded), the cost of one trade vs. the mid price.**

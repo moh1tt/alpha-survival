@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression, Ridge
 
@@ -25,7 +26,14 @@ from alpha_survival.features import (
     add_volatility,
     rank_normalise,
 )
-from alpha_survival.metrics import ic_summary, oos_r2, rank_ic
+from alpha_survival.metrics import (
+    deflated_sharpe_ratio,
+    expected_max_sharpe,
+    ic_summary,
+    oos_r2,
+    probabilistic_sharpe_ratio,
+    rank_ic,
+)
 from alpha_survival.models import (
     Forecaster,
     HistoricalMean,
@@ -73,6 +81,12 @@ BORROW_BPS_PA = 50
 # Eras for the spread table: before decimalisation (2001), then roughly 7-year blocks.
 SPREAD_ERAS = [1996, 2000, 2008, 2015, 2026]
 SPREAD_ERA_LABELS = ["1997-2000", "2001-2008", "2009-2015", "2016-2026"]
+# Variants tried but never built into portfolios: ridge and rolling-window OLS, each
+# of which could have been traded equal- or value-weighted. They count towards the
+# number of trials for the deflated Sharpe ratio: ignoring them flatters the winner.
+UNREPORTED_TRIALS = 4
+# Trial counts to show the deflated Sharpe ratio at, besides the honest count.
+SENSITIVITY_TRIALS = (10, 50)
 
 
 def baseline_models() -> list[Forecaster]:
@@ -227,7 +241,11 @@ def run_all(
     return pd.concat([expanding, rolling], ignore_index=True)
 
 
-def portfolio_table(oos_by_model: dict[str, pd.DataFrame], panel: pd.DataFrame) -> pd.DataFrame:
+def portfolio_table(
+    oos_by_model: dict[str, pd.DataFrame],
+    panel: pd.DataFrame,
+    keep_net: dict[tuple[str, str], pd.Series] | None = None,
+) -> pd.DataFrame:
     """Decile long-short performance for OLS and each signal, EW and VW.
 
     Gross stats, plus average turnover, net Sharpe at each flat `COST_BPS` and at
@@ -235,7 +253,9 @@ def portfolio_table(oos_by_model: dict[str, pd.DataFrame], panel: pd.DataFrame) 
     `BORROW_BPS_PA` short fee, and the break-even trading cost. Signals trade their
     published direction (`PUBLISHED_SIGN`); OLS's forecast already carries the
     directions it learned in training. Value weights use market cap at formation
-    (month_end), known when the trade is placed.
+    (month_end), known when the trade is placed. If `keep_net` is given, each
+    portfolio's monthly returns net of estimated costs are stored in it by
+    (portfolio, weighting).
     """
     caps = panel[["permaticker", "month_end", "market_cap"]]
     spread = estimated_spread_bps(panel).set_index(["permaticker", "month_end"])["cost_bps"]
@@ -257,7 +277,10 @@ def portfolio_table(oos_by_model: dict[str, pd.DataFrame], panel: pd.DataFrame) 
                 net_ret = net_returns(gross, trading_costs(trade_rows, c), BORROW_BPS_PA)
                 net[f"sharpe_net_{c}bps"] = summarise(net_ret)["sharpe"]
             est_cost = trading_costs(trade_rows, spread).reindex(gross.index)
-            net["sharpe_net_est"] = summarise(net_returns(gross, est_cost, BORROW_BPS_PA))["sharpe"]
+            net_est = net_returns(gross, est_cost, BORROW_BPS_PA)
+            net["sharpe_net_est"] = summarise(net_est)["sharpe"]
+            if keep_net is not None:
+                keep_net[(name, weighting)] = net_est
             # Average cost paid per dollar traded: what the estimated spreads amount to.
             net["avg_cost_bps"] = float(est_cost.sum() / to.reindex(gross.index).sum() * 1e4)
             rows.append(
@@ -346,6 +369,75 @@ def render_portfolios(table: pd.DataFrame) -> str:
     )
 
 
+def honest_trials(n_portfolios: int) -> int:
+    """Every portfolio in the table plus the variants tried but not built."""
+    return n_portfolios + UNREPORTED_TRIALS
+
+
+def monthly_sharpes(net: dict[tuple[str, str], pd.Series]) -> tuple[dict, float]:
+    """Per-month Sharpe of each portfolio, and their variance across portfolios."""
+    sharpes = {k: float(r.mean() / r.std(ddof=0)) for k, r in net.items()}
+    return sharpes, float(np.var(list(sharpes.values()), ddof=1))
+
+
+def selection_table(net: dict[tuple[str, str], pd.Series]) -> pd.DataFrame:
+    """Does each net-of-cost Sharpe survive having tried this many portfolios?
+
+    Sharpes are per month here, as the formulas need. The variance across trials is
+    that of the portfolios' actual Sharpes: how far luck and real differences spread
+    them. `psr` asks "true Sharpe > 0?"; `dsr_nN` asks "true Sharpe > the best of N
+    skill-less tries?" (Bailey & Lopez de Prado 2014). Best net Sharpe first.
+    """
+    sharpes, variance = monthly_sharpes(net)
+    trials = sorted({honest_trials(len(net)), *SENSITIVITY_TRIALS})
+    rows = []
+    for (name, weighting), r in net.items():
+        row = {
+            "portfolio": name,
+            "weighting": weighting,
+            "sharpe_net_est": sharpes[(name, weighting)] * np.sqrt(12),
+            "psr": probabilistic_sharpe_ratio(r),
+        }
+        row |= {f"dsr_n{n}": deflated_sharpe_ratio(r, n, variance) for n in trials}
+        rows.append(row)
+    table = pd.DataFrame(rows).sort_values("sharpe_net_est", ascending=False)
+    return table.reset_index(drop=True)
+
+
+def render_selection(table: pd.DataFrame, net: dict[tuple[str, str], pd.Series]) -> str:
+    n = honest_trials(len(net))
+    _, variance = monthly_sharpes(net)
+    bar = expected_max_sharpe(n, variance) * np.sqrt(12)
+    dsr_cols = [c for c in table.columns if c.startswith("dsr_n")]
+    shown = table.assign(
+        sharpe_net_est=table["sharpe_net_est"].map("{:.2f}".format),
+        **{c: table[c].map("{:.3f}".format) for c in ["psr", *dsr_cols]},
+    )
+    return "\n".join(
+        [
+            "## Selection bias: deflated Sharpe ratio",
+            "",
+            "**Real data, out-of-sample, net of estimated costs. Asks whether the best "
+            "portfolio beats what luck alone would give the best of many tries.**",
+            "",
+            f"- Trials: {n} = the {len(net)} portfolios above plus {UNREPORTED_TRIALS} "
+            "variants tried but not built (ridge and rolling-window OLS, each equal- or "
+            "value-weighted). Every row is judged against the same bar, since any of "
+            "them could have been the one we picked.",
+            f"- Luck bar: with {n} skill-less trials whose Sharpes spread as ours do "
+            f"(std {np.sqrt(variance * 12):.2f} annualised), the best would show a Sharpe "
+            f"of about {bar:.2f} by chance (Bailey & Lopez de Prado 2014).",
+            "- `psr`: probability the true Sharpe is above 0, allowing for skew and fat "
+            "tails (Bailey & Lopez de Prado 2012). `dsr_nN`: probability it is above the "
+            f"luck bar for N trials. `dsr_n{n}` is the honest count; the others show how "
+            "much the verdict depends on N. Above 0.95: survives selection.",
+            "",
+            markdown_table(shown),
+            "",
+        ]
+    )
+
+
 def spread_table(panel: pd.DataFrame) -> pd.DataFrame:
     """Average estimated half-spread (bps) by size decile, for a few eras."""
     est = estimated_spread_bps(panel)
@@ -397,14 +489,18 @@ def main(argv: list[str] | None = None) -> None:
     forecasts: dict[str, pd.DataFrame] = {}
     table = run_all(panel, keep=forecasts)
     print(table.to_string(index=False))
-    portfolios = portfolio_table(forecasts, panel)
+    net: dict[tuple[str, str], pd.Series] = {}
+    portfolios = portfolio_table(forecasts, panel, keep_net=net)
     print(portfolios.to_string(index=False))
+    selection = selection_table(net)
+    print(selection.to_string(index=False))
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     report = "\n".join(
         [
             render_report(table, panel),
             render_portfolios(portfolios),
+            render_selection(selection, net),
             render_spreads(spread_table(panel)),
         ]
     )

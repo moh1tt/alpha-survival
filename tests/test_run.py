@@ -7,14 +7,17 @@ from alpha_survival.run import (
     COST_BPS,
     PUBLISHED_SIGN,
     RAW_FEATURES,
+    UNREPORTED_TRIALS,
     baseline_models,
     evaluate,
     portfolio_table,
     prepare,
     render_portfolios,
     render_report,
+    render_selection,
     render_spreads,
     run_all,
+    selection_table,
     spread_table,
 )
 
@@ -165,3 +168,43 @@ def test_signal_portfolios_trade_the_published_direction():
     flipped = flipped.set_index("weighting")
     assert table.loc["equal", "direction"] == "low"
     assert table.loc["equal", "ann_return"] == pytest.approx(-flipped.loc["equal", "ann_return"])
+
+
+def test_selection_table_deflates_every_portfolio_by_the_honest_trial_count():
+    panel = prepare(make_panel())
+    forecasts, net = {}, {}
+    run_all(panel, keep=forecasts, min_train=12)
+    portfolio_table(forecasts, panel, keep_net=net)
+    assert len(net) == 16  # 8 portfolios x 2 weightings
+    table = selection_table(net)
+    honest = f"dsr_n{16 + UNREPORTED_TRIALS}"
+    assert list(table.columns) == [
+        "portfolio",
+        "weighting",
+        "sharpe_net_est",
+        "psr",
+        "dsr_n10",
+        honest,
+        "dsr_n50",
+    ]
+    assert table["sharpe_net_est"].is_monotonic_decreasing  # best first
+    # Same Sharpe as the NET table, and more trials only ever make the test harder.
+    best = table.iloc[0]
+    assert best["psr"] > best["dsr_n10"] > best[honest] > best["dsr_n50"]
+    probs = table[["psr", "dsr_n10", honest, "dsr_n50"]]
+    assert ((probs >= 0) & (probs <= 1)).all().all()
+    report = render_selection(table, net)
+    assert "deflated Sharpe" in report and f"Trials: {16 + UNREPORTED_TRIALS}" in report
+
+
+def test_selection_table_sharpe_matches_the_net_table():
+    panel = prepare(make_panel())
+    forecasts, net = {}, {}
+    run_all(panel, keep=forecasts, min_train=12)
+    portfolios = portfolio_table(forecasts, panel, keep_net=net)
+    keys = ["portfolio", "weighting"]
+    merged = portfolios.merge(selection_table(net), on=keys, suffixes=("", "_sel"))
+    # Same returns; the selection table uses population std (ddof=0), so close, not equal.
+    assert merged["sharpe_net_est_sel"].to_numpy() == pytest.approx(
+        merged["sharpe_net_est"].to_numpy(), rel=0.05
+    )
