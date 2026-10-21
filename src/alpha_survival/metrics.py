@@ -130,3 +130,39 @@ def probabilistic_sharpe_ratio(returns: pd.Series, sr_benchmark: float = 0.0) ->
     if variance <= 0:
         return 1.0 if sr > sr_benchmark else 0.0
     return NormalDist().cdf((sr - sr_benchmark) * np.sqrt(t - 1) / np.sqrt(variance))
+
+
+def expected_max_sharpe(n_trials: int, sharpe_variance: float) -> float:
+    """Expected best Sharpe among `n_trials` strategies with zero true skill.
+
+    sqrt(V) * ((1 - g) * Phi^-1(1 - 1/N) + g * Phi^-1(1 - 1/(N e))), g = Euler-Mascheroni
+    (Bailey & Lopez de Prado 2014). V is the variance of the estimated Sharpes across
+    trials, per period like the Sharpes. Luck alone gets this far, so it is the bar a
+    selected strategy must clear. One trial involves no selection: the bar is 0.
+    """
+    if n_trials < 1:
+        raise ValueError("need at least 1 trial")
+    if sharpe_variance < 0:
+        raise ValueError("sharpe_variance cannot be negative")
+    if n_trials == 1:
+        return 0.0
+    inv = NormalDist().inv_cdf
+    return float(
+        np.sqrt(sharpe_variance)
+        * (
+            (1 - np.euler_gamma) * inv(1 - 1 / n_trials)
+            + np.euler_gamma * inv(1 - 1 / (n_trials * np.e))
+        )
+    )
+
+
+def deflated_sharpe_ratio(returns: pd.Series, n_trials: int, sharpe_variance: float) -> float:
+    """Probability the true Sharpe beats the best of `n_trials` skill-less tries.
+
+    The probabilistic Sharpe ratio with the benchmark raised to `expected_max_sharpe`
+    (Bailey & Lopez de Prado 2014).
+    > 0.95 means the result survives the selection. `n_trials` should count every
+    variant tried, not just the ones reported; correlated variants may be counted as
+    fewer independent trials.
+    """
+    return probabilistic_sharpe_ratio(returns, expected_max_sharpe(n_trials, sharpe_variance))

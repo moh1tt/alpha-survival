@@ -5,6 +5,8 @@ import pandas as pd
 import pytest
 
 from alpha_survival.metrics import (
+    deflated_sharpe_ratio,
+    expected_max_sharpe,
     ic_summary,
     newey_west_lags,
     newey_west_t_stat,
@@ -180,3 +182,35 @@ def test_psr_bad_input_raises():
         probabilistic_sharpe_ratio(pd.Series([0.01, 0.02]))
     with pytest.raises(ValueError):
         probabilistic_sharpe_ratio(pd.Series([0.01, 0.01, 0.01, np.nan]))
+
+
+def test_expected_max_sharpe_shape():
+    assert expected_max_sharpe(1, 0.01) == 0.0  # no selection
+    assert expected_max_sharpe(16, 0.0) == 0.0  # no dispersion, no luck
+    assert expected_max_sharpe(10, 0.01) < expected_max_sharpe(100, 0.01)  # more tries
+    assert expected_max_sharpe(16, 0.04) == pytest.approx(2 * expected_max_sharpe(16, 0.01))
+
+
+def test_expected_max_sharpe_matches_simulation():
+    # 100 skill-less strategies, 120 months each: the best Sharpe should average out
+    # close to the formula, with V the actual spread of the Sharpe estimates.
+    rng = np.random.default_rng(4)
+    returns = rng.normal(0, 0.05, size=(1_000, 100, 120))
+    sharpes = returns.mean(axis=2) / returns.std(axis=2)
+    expected = expected_max_sharpe(100, sharpes.var())
+    assert sharpes.max(axis=1).mean() == pytest.approx(expected, rel=0.05)
+
+
+def test_expected_max_sharpe_bad_input_raises():
+    with pytest.raises(ValueError):
+        expected_max_sharpe(0, 0.01)
+    with pytest.raises(ValueError):
+        expected_max_sharpe(10, -0.01)
+
+
+def test_dsr_is_psr_against_the_luck_bar():
+    returns = standardised(np.random.default_rng(5).normal(size=240))  # SR 0.2
+    assert deflated_sharpe_ratio(returns, 1, 0.01) == probabilistic_sharpe_ratio(returns)
+    bar = expected_max_sharpe(16, 0.01)
+    assert deflated_sharpe_ratio(returns, 16, 0.01) == probabilistic_sharpe_ratio(returns, bar)
+    assert deflated_sharpe_ratio(returns, 16, 0.01) < probabilistic_sharpe_ratio(returns)
