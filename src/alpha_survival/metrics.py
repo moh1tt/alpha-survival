@@ -7,6 +7,8 @@ missing are skipped.
 
 from __future__ import annotations
 
+from statistics import NormalDist
+
 import numpy as np
 import pandas as pd
 
@@ -101,3 +103,30 @@ def ic_summary(ic: pd.Series) -> dict[str, float]:
         "hit_rate": float((ic > 0).mean()),
         "n_months": n,
     }
+
+
+def probabilistic_sharpe_ratio(returns: pd.Series, sr_benchmark: float = 0.0) -> float:
+    """Probability that the true Sharpe ratio beats `sr_benchmark` (Bailey & Lopez de Prado 2012).
+
+    Phi((SR - SR*) * sqrt(T - 1) / sqrt(1 - skew * SR + (kurt - 1) / 4 * SR^2)).
+    SR and SR* are per period (monthly here), NOT annualised. The estimated SR is
+    noisier when returns have negative skew or fat tails (kurt > 3), so the same
+    SR earns a lower probability. Normal returns reduce the denominator to
+    sqrt(1 + SR^2 / 2). Moments are population (ddof=0), as in the paper.
+    """
+    x = np.asarray(pd.Series(returns).dropna(), dtype=float)
+    t = len(x)
+    if t < 3:
+        raise ValueError("need at least 3 returns")
+    e = x - x.mean()
+    std = np.sqrt(e @ e / t)
+    if std == 0:
+        raise ValueError("returns have zero volatility")
+    sr = x.mean() / std
+    skew = np.mean(e**3) / std**3
+    kurt = np.mean(e**4) / std**4
+    # kurt >= skew^2 + 1 for any sample, so this is >= (1 - skew * sr / 2)^2 >= 0.
+    variance = 1 - skew * sr + (kurt - 1) / 4 * sr**2
+    if variance <= 0:
+        return 1.0 if sr > sr_benchmark else 0.0
+    return NormalDist().cdf((sr - sr_benchmark) * np.sqrt(t - 1) / np.sqrt(variance))

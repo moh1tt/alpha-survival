@@ -1,3 +1,5 @@
+from statistics import NormalDist
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -7,6 +9,7 @@ from alpha_survival.metrics import (
     newey_west_lags,
     newey_west_t_stat,
     oos_r2,
+    probabilistic_sharpe_ratio,
     rank_ic,
 )
 from alpha_survival.models import TARGET
@@ -125,3 +128,55 @@ def test_newey_west_matches_statsmodels():
         cov_type="HAC", cov_kwds={"maxlags": 4, "use_correction": False}
     )
     assert newey_west_t_stat(pd.Series(x), lags=4) == pytest.approx(fit.tvalues[0])
+
+
+def standardised(x, mean=0.02, std=0.1) -> pd.Series:
+    """Rescale `x` to an exact (population) mean and std, so only its shape differs."""
+    x = np.asarray(x, dtype=float)
+    return pd.Series(mean + std * (x - x.mean()) / x.std())
+
+
+def symmetric(x) -> np.ndarray:
+    """`x` plus its mirror image about its mean: skew is exactly 0."""
+    x = np.asarray(x, dtype=float)
+    return np.concatenate([x, 2 * x.mean() - x])
+
+
+def test_psr_by_hand():
+    # mean 0.02, std 0.01 -> SR 2; symmetric two-point: skew 0, kurt 1 -> denominator 1.
+    returns = pd.Series([0.03, 0.01, 0.03, 0.01])
+    assert probabilistic_sharpe_ratio(returns) == pytest.approx(NormalDist().cdf(2 * np.sqrt(3)))
+
+
+def test_psr_is_half_at_the_benchmark():
+    returns = standardised(np.random.default_rng(0).normal(size=200))
+    assert probabilistic_sharpe_ratio(returns, sr_benchmark=0.2) == pytest.approx(0.5)
+
+
+def test_psr_normal_returns_match_simple_formula():
+    # Skew 0 and kurt ~3, so the denominator is ~sqrt(1 + SR^2 / 2).
+    returns = standardised(symmetric(np.random.default_rng(1).normal(size=10_000)))
+    sr, sr_star, t = 0.2, 0.19, len(returns)
+    simple = NormalDist().cdf((sr - sr_star) * np.sqrt(t - 1) / np.sqrt(1 + sr**2 / 2))
+    assert probabilistic_sharpe_ratio(returns, sr_star) == pytest.approx(simple, abs=1e-3)
+
+
+def test_psr_penalises_negative_skew():
+    right_skewed = np.random.default_rng(2).lognormal(0, 0.8, 120)
+    pos = standardised(right_skewed)
+    neg = standardised(-right_skewed)  # mirror: same SR and kurtosis, skew flipped
+    assert probabilistic_sharpe_ratio(neg) < probabilistic_sharpe_ratio(pos)
+
+
+def test_psr_penalises_fat_tails():
+    rng = np.random.default_rng(3)
+    thin = standardised(symmetric(rng.normal(size=60)))
+    fat = standardised(symmetric(rng.standard_t(3, size=60)))  # same SR, skew 0, kurt > 3
+    assert probabilistic_sharpe_ratio(fat) < probabilistic_sharpe_ratio(thin)
+
+
+def test_psr_bad_input_raises():
+    with pytest.raises(ValueError):
+        probabilistic_sharpe_ratio(pd.Series([0.01, 0.02]))
+    with pytest.raises(ValueError):
+        probabilistic_sharpe_ratio(pd.Series([0.01, 0.01, 0.01, np.nan]))
