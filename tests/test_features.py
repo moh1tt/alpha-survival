@@ -831,3 +831,101 @@ def test_accrual_signals_ignore_later_months_and_other_stocks():
     out = features.add_accrual_signals(pd.concat([shocked, other], ignore_index=True))
     out = out[out["permaticker"] == 1].reset_index(drop=True)
     pd.testing.assert_frame_equal(out.loc[:14, cols], base.loc[:14, cols])
+
+
+BS_CHANGES = [
+    "ch_nncoa",
+    "ch_nwc",
+    "del_coa",
+    "del_col",
+    "del_drc",
+    "del_equ",
+    "del_lti",
+    "del_finl",
+    "del_net_fin",
+    "ch_inv",
+    "ch_eq",
+    "ch_asset_turnover",
+    "invest_ppe_inv",
+]
+
+
+def change_panel(n_months=26, permaticker=1, **overrides):
+    defaults = {"investmentsc": 50.0, "investmentsnc": 150.0, "revenue": 1e7}
+    return accrual_panel(n_months=n_months, permaticker=permaticker, **(defaults | overrides))
+
+
+def test_balance_sheet_changes_by_hand():
+    # accounting_row: assets 2000, liabilities 1200, equity 800, cash 100, debt 400;
+    # accrual_panel: assetsc 600, liabilitiesc 300, debtc 50, debtnc 350;
+    # profit_panel: inventory 80, deferredrev 20, ppnenet 400.
+    panel = change_panel()
+    new = {
+        "assets": 2200.0,
+        "assetsc": 700.0,
+        "cashneq": 120.0,
+        "liabilities": 1300.0,
+        "liabilitiesc": 330.0,
+        "debtc": 60.0,
+        "debtnc": 390.0,
+        "debt": 450.0,
+        "equity": 900.0,
+        "investmentsc": 40.0,
+        "investmentsnc": 180.0,
+        "deferredrev": 30.0,
+        "inventory": 100.0,
+        "ppnenet": 450.0,
+    }
+    for col, value in new.items():
+        panel.loc[25, col] = value
+    out = features.add_balance_sheet_changes(panel).iloc[25]
+    avg = 2100.0
+    nncoa = lambda a, ac, inv, lia, dc, dn: ((a - ac - inv) - (lia - dc - dn)) / a  # noqa: E731
+    assert out["ch_nncoa"] == pytest.approx(
+        nncoa(2200, 700, 180, 1300, 60, 390) - nncoa(2000, 600, 150, 1200, 50, 350)
+    )
+    assert out["ch_nwc"] == pytest.approx((580 - 270) / 2200 - (500 - 250) / 2000)
+    assert out["del_coa"] == pytest.approx((580 - 500) / avg)
+    assert out["del_col"] == pytest.approx((270 - 250) / avg)
+    assert out["del_drc"] == pytest.approx(10 / avg)
+    assert out["del_equ"] == pytest.approx(100 / avg)
+    assert out["del_lti"] == pytest.approx(30 / avg)
+    assert out["del_finl"] == pytest.approx(50 / avg)
+    assert out["del_net_fin"] == pytest.approx(((220 - 450) - (200 - 400)) / avg)
+    assert out["ch_inv"] == pytest.approx(20 / avg)
+    assert out["ch_eq"] == pytest.approx(900 / 800)
+    assert out["invest_ppe_inv"] == pytest.approx((50 + 20) / 2000)
+
+
+def test_change_in_asset_turnover_by_hand():
+    # Net operating assets (assets - cash - investments) - (liabilities - debt):
+    # 2000 - 100 - 200 - (1200 - 400) = 900 throughout, until revenue doubles at 25.
+    panel = change_panel()
+    panel.loc[25, "revenue"] = 2e7
+    out = features.add_balance_sheet_changes(panel)
+    assert out["ch_asset_turnover"].iloc[24] == pytest.approx(0.0)
+    assert out["ch_asset_turnover"].iloc[25] == pytest.approx(2e7 / 900 - 1e7 / 900)
+    assert out["ch_asset_turnover"].iloc[:24].isna().all()  # needs two years
+
+
+def test_balance_sheet_change_exclusions():
+    bank = features.add_balance_sheet_changes(change_panel(sic_code=6022.0))
+    assert bank["del_drc"].isna().all() and bank["del_equ"].iloc[12:].notna().all()
+    small = features.add_balance_sheet_changes(change_panel(revenue=1e6))
+    assert small["del_drc"].isna().all()
+    no_drc = features.add_balance_sheet_changes(change_panel(deferredrev=0.0))
+    assert no_drc["del_drc"].isna().all()
+    negative = features.add_balance_sheet_changes(change_panel(equity=-5.0))
+    assert negative["ch_eq"].isna().all() and negative["del_drc"].isna().all()
+
+
+def test_balance_sheet_changes_need_twelve_months_and_ignore_the_future():
+    out = features.add_balance_sheet_changes(change_panel())
+    assert out[BS_CHANGES].iloc[:12].isna().all().all()
+    base = features.add_balance_sheet_changes(change_panel())
+    shocked = change_panel()
+    shocked.loc[shocked.index >= 20, ["assets", "equity", "inventory", "debt"]] = 9e9
+    other = change_panel(permaticker=2, assets=1.0, inventory=1e12)
+    out = features.add_balance_sheet_changes(pd.concat([shocked, other], ignore_index=True))
+    out = out[out["permaticker"] == 1].reset_index(drop=True)
+    pd.testing.assert_frame_equal(out.loc[:19, BS_CHANGES], base.loc[:19, BS_CHANGES])

@@ -100,6 +100,20 @@ FEATURE_ACRONYMS = {
     "total_accruals": "TotalAccruals",
     "noa": "NOA",
     "d_noa": "dNoa",
+    # Step 57b: balance-sheet changes
+    "ch_nncoa": "ChNNCOA",
+    "ch_nwc": "ChNWC",
+    "del_coa": "DelCOA",
+    "del_col": "DelCOL",
+    "del_drc": "DelDRC",
+    "del_equ": "DelEqu",
+    "del_lti": "DelLTI",
+    "del_finl": "DelFINL",
+    "del_net_fin": "DelNetFin",
+    "ch_inv": "ChInv",
+    "ch_eq": "ChEQ",
+    "ch_asset_turnover": "ChAssetTurnover",
+    "invest_ppe_inv": "InvestPPEInv",
 }
 
 

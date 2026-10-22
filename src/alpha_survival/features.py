@@ -559,11 +559,15 @@ def add_book_payout_debt_ratios(panel: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _months_ago(panel: pd.DataFrame, column: str, months: int) -> pd.Series:
-    """`column` on the same stock's row `months` calendar months earlier (NaN if none):
-    what was public then. `panel` must be sorted by stock (`_sorted_by_stock`)."""
-    grid = _calendar_grid(panel, column)
-    return pd.Series(_at_rows(grid.shift(months), panel, grid), index=panel.index)
+def _months_ago(panel: pd.DataFrame, values: str | pd.Series, months: int) -> pd.Series:
+    """`values` (a column name, or a Series aligned with `panel`) on the same stock's
+    row `months` calendar months earlier (NaN if none): what was public then."""
+    series = panel[values] if isinstance(values, str) else values
+    keys = pd.DataFrame(
+        {"permaticker": panel["permaticker"], "month_end": panel["month_end"], "v": series}
+    )
+    grid = _calendar_grid(keys, "v")
+    return pd.Series(_at_rows(grid.shift(months), keys, grid), index=panel.index)
 
 
 TAX_RATE = 0.35  # Tax: OSAP's top statutory rate from 1993 (kept after 2018's cut to 21%)
@@ -698,17 +702,114 @@ def add_accrual_signals(panel: pd.DataFrame) -> pd.DataFrame:
     operating_all = (panel["assets"] - panel["cashneq"].fillna(0)) - (
         panel["liabilities"] - panel["debt"].fillna(0)
     )
-    panel = _with(panel, _noa_all=operating_all)
-    d_noa = (operating_all - _months_ago(panel, "_noa_all", 12)) / assets_before
+    d_noa = (operating_all - _months_ago(panel, operating_all, 12)) / assets_before
 
     return _with(
-        panel.drop(columns="_noa_all"),
+        panel,
         accruals=accruals,
         pct_acc=(income - panel["ncfo"]) / scale,
         pct_tot_acc=pct_tot_acc,
         total_accruals=(income - cash_flows + equity_flows) / assets_before,
         noa=operating / assets_before,
         d_noa=d_noa,
+    )
+
+
+DELDRC_MIN_REVENUE = 5e6  # DelDRC: OSAP drops firms with sales under $5m (Compustat: 5)
+
+
+def add_balance_sheet_changes(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add 13 signals built on 12-month changes in balance-sheet items (OSAP's code).
+
+    Growth in operating assets, working capital, investment, book equity and debt
+    predicts LOWER returns; growth in deferred revenue, net financial assets and
+    asset turnover, higher (signs in run.PUBLISHED_SIGN, from the catalogue).
+    "Avg assets" = mean of assets now and 12 months ago.
+    Compustat -> Sharadar: act/lct -> assetsc/liabilitiesc, dlc/dltt -> debtc/debtnc,
+    ivst/ivao -> investmentsc/investmentsnc, drc -> deferredrev, invt -> inventory,
+    ceq -> equity; no preferred stock field (OSAP fills it with 0 when missing).
+    - `ch_nncoa`: change in (non-current operating assets - non-current operating
+      liabilities) / assets (ChNNCOA; Soliman 2008).
+    - `ch_nwc`: change in (current assets - cash - (current liabilities - short-term
+      debt)) / assets (ChNWC; Soliman 2008).
+    - `del_coa`, `del_col`: change in current operating assets / liabilities over
+      avg assets (DelCOA, DelCOL; Richardson et al. 2005).
+    - `del_drc`: change in deferred revenue over avg assets; NaN for financials,
+      book equity <= 0, revenue < $5m, or no deferred revenue at all (DelDRC;
+      Prakash & Sinha 2013). Sharadar combines current and long-term deferred revenue.
+    - `del_equ`: change in book equity over avg assets (DelEqu; Richardson et al. 2005).
+    - `del_lti`: change in long-term investments over avg assets (DelLTI; same).
+    - `del_finl`: change in total debt over avg assets (DelFINL; same). Sharadar's
+      total `debt`, which is short- plus long-term where both are reported.
+    - `del_net_fin`: change in (short- and long-term investments - debt) over avg
+      assets (DelNetFin; same).
+    - `ch_inv`: change in inventory over avg assets (ChInv; Thomas & Zhang 2002).
+    - `ch_eq`: book equity over book equity 12 months ago, both positive (ChEQ;
+      Lockwood & Prombutr 2010).
+    - `ch_asset_turnover`: change over 12 months of revenue / avg net operating
+      assets, NaN if negative (ChAssetTurnover; Soliman 2008). Sharadar lacks the
+      'other' current and long-term items, so net operating assets here are
+      (assets - cash - investments) - (liabilities - debt).
+    - `invest_ppe_inv`: (change in PP&E + change in inventory) / assets 12 months
+      ago (InvestPPEInv; Lyandres, Sun & Zhang 2008). Net, not gross, PP&E.
+    Financials by today's SIC code. Values 12 months earlier are the stock's own
+    row then (`_months_ago`): no look-ahead.
+    """
+    panel = _sorted_by_stock(panel)
+
+    def ago(values: str | pd.Series) -> pd.Series:
+        return _months_ago(panel, values, 12)
+
+    def change(values: str | pd.Series) -> pd.Series:
+        series = panel[values] if isinstance(values, str) else values
+        return series - ago(series)
+
+    assets = panel["assets"].where(panel["assets"] > 0)
+    assets_before = ago(assets)
+    avg_assets = (assets + assets_before) / 2
+
+    nncoa = (panel["assets"] - panel["assetsc"] - panel["investmentsnc"]) - (
+        panel["liabilities"] - panel["debtc"] - panel["debtnc"]
+    )
+    current_assets = panel["assetsc"] - panel["cashneq"]
+    current_liabilities = panel["liabilitiesc"] - panel["debtc"]
+    nwc = current_assets - current_liabilities
+    net_fin = panel["investmentsc"] + panel["investmentsnc"] - panel["debt"]
+
+    drc = panel["deferredrev"]
+    del_drc = change(drc) / avg_assets
+    no_drc = (drc == 0) & (del_drc == 0)
+    drc_out = (
+        (panel["equity"] <= 0)
+        | no_drc
+        | (panel["revenue"] < DELDRC_MIN_REVENUE)
+        | _financial(panel)
+    )
+
+    equity = panel["equity"].where(panel["equity"] > 0)
+
+    investments = panel["investmentsc"].fillna(0) + panel["investmentsnc"].fillna(0)
+    noa = (panel["assets"] - panel["cashneq"] - investments) - (
+        panel["liabilities"] - panel["debt"]
+    )
+    turnover = panel["revenue"] / ((noa + ago(noa)) / 2)
+    turnover = turnover.where(turnover >= 0)
+
+    return _with(
+        panel,
+        ch_nncoa=change(nncoa / assets),
+        ch_nwc=change(nwc / assets),
+        del_coa=change(current_assets) / avg_assets,
+        del_col=change(current_liabilities) / avg_assets,
+        del_drc=del_drc.mask(drc_out),
+        del_equ=change("equity") / avg_assets,
+        del_lti=change("investmentsnc") / avg_assets,
+        del_finl=change("debt") / avg_assets,
+        del_net_fin=change(net_fin) / avg_assets,
+        ch_inv=change("inventory") / avg_assets,
+        ch_eq=equity / ago(equity),
+        ch_asset_turnover=change(turnover),
+        invest_ppe_inv=(change("ppnenet") + change("inventory")) / assets_before,
     )
 
 

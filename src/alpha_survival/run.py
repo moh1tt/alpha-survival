@@ -21,6 +21,7 @@ from alpha_survival.data.real import load_panel
 from alpha_survival.features import (
     add_accrual_signals,
     add_asset_growth,
+    add_balance_sheet_changes,
     add_book_payout_debt_ratios,
     add_daily_price_signals,
     add_momentum,
@@ -139,7 +140,7 @@ def prepare(panel: pd.DataFrame) -> pd.DataFrame:
     panel = add_daily_price_signals(add_seasonality(add_past_returns(panel)))
     panel = add_valuation_ratios(add_trend_price_age(panel))
     panel = add_profitability_ratios(add_book_payout_debt_ratios(panel))
-    panel = add_accrual_signals(panel)
+    panel = add_balance_sheet_changes(add_accrual_signals(panel))
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
 

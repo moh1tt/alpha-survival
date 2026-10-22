@@ -32,7 +32,7 @@ BMdec,Accounting,1,"Fama and French (1992), JF",computable,2,sf1:equityusd; sep,
 CF,Accounting,1,"Lakonishok, Shleifer, Vishny (1994), JF",computable,2,"sf1:netinc,depamor; sep",,
 Cash,Accounting,1,"Palazzo (2012), JFE",computable,2,"sf1:cashneq,assets (quarterly)",,
 CashProd,Accounting,-1,"Chandrashekar and Rao (2009), WP",computable,2,"sf1:cashneq,assets; sep",,
-ChAssetTurnover,Accounting,1,"Soliman (2008), AR",computable,2,sf1:assetturnover,,
+ChAssetTurnover,Accounting,1,"Soliman (2008), AR",approximate,2,"sf1:revenue,assets,cashneq,investmentsc,investmentsnc,liabilities,debt",,"no other current/long-term asset and liability fields: net operating assets = (assets - cash - investments) - (liabilities - debt)"
 ChEQ,Accounting,-1,"Lockwood and Prombutr (2010), JFR",computable,2,sf1:equity,,
 ChInv,Accounting,-1,"Thomas and Zhang (2002), RAS",computable,2,"sf1:inventory,assets",,
 ChNNCOA,Accounting,-1,"Soliman (2008), AR",computable,2,"sf1:assets,assetsc,investmentsnc,liabilities,debtc,debtnc",,
@@ -41,7 +41,7 @@ ChTax,Accounting,1,"Thomas and Zhang (2011), JAR",computable,2,"sf1:taxexp,asset
 CompositeDebtIssuance,Accounting,-1,"Lyandres, Sun and Zhang (2008), RFS",computable,2,sf1:debt,,
 DelCOA,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:assetsc,cashneq,assets",,
 DelCOL,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:liabilitiesc,debtc,assets",,
-DelDRC,Accounting,1,"Prakash and Sinha (2013), CAR",computable,2,"sf1:deferredrev,assets,equity",,
+DelDRC,Accounting,1,"Prakash and Sinha (2013), CAR",approximate,2,"sf1:deferredrev,assets,equity,revenue; tickers:siccode",,current and long-term deferred revenue combined; financials by current SIC code
 DelEqu,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:equity,assets",,
 DelLTI,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:investmentsnc,assets",,
 EntMult,Accounting,-1,"Loughran and Wellman (2011), JFQA",computable,2,"sf1:ev,ebitda",,
