@@ -1,0 +1,213 @@
+acronym,osap_category,sign,reference,status,batch,inputs,external,note
+AssetGrowth,Accounting,-1,"Cooper, Gulen and Schill (2008), JF",existing,,sf1:assets,,pipeline feature asset_growth
+BM,Accounting,1,"Stattman (1980), Other",existing,,sf1:equityusd; sep,,pipeline feature bm (level of total book equity; OSAP uses log tangible equity)
+GP,Accounting,1,"Novy-Marx (2013), JFE",existing,,"sf1:gp,assets",,pipeline feature gp_a
+Mom12m,Price,1,"Jegadeesh and Titman (1993), JF",existing,,sep:closeadj,,pipeline feature mom_12_1
+STreversal,Price,-1,"Jegadeesh (1990), JF",existing,,sep:closeadj,,pipeline feature rev_1m
+Size,Price,-1,"Banz (1981), JFE",existing,,sep:closeunadj; sf1:sharesbas,,pipeline feature log_mcap
+High52,Price,1,"George and Hwang (2004), JF",computable,1,sep:closeadj,,
+IntMom,Price,1,"Novy-Marx (2012), JFE",computable,1,sep:closeadj,,
+LRreversal,Price,-1,"De Bondt and Thaler (1985), JF",computable,1,sep:closeadj,,
+MRreversal,Price,-1,"De Bondt and Thaler (1985), JF",computable,1,sep:closeadj,,
+MaxRet,Price,-1,"Bali, Cakici, and Whitelaw (2011), JFE",computable,1,sep:closeadj,,
+Mom12mOffSeason,Price,1,"Heston and Sadka (2008), JFE",computable,1,sep:closeadj,,
+Mom6m,Price,1,"Jegadeesh and Titman (1993), JF",computable,1,sep:closeadj,,
+MomOffSeason,Price,-1,"Heston and Sadka (2008), JFE",computable,1,sep:closeadj,,
+MomOffSeason06YrPlus,Price,-1,"Heston and Sadka (2008), JFE",computable,1,sep:closeadj,,needs 10y history: early years sparse
+MomOffSeason11YrPlus,Price,-1,"Heston and Sadka (2008), JFE",computable,1,sep:closeadj,,needs 15y history: early years sparse
+MomOffSeason16YrPlus,Price,-1,"Heston and Sadka (2008), JFE",computable,1,sep:closeadj,,needs 20y history: mostly post-2017
+MomSeason,Price,1,"Heston and Sadka (2008), JFE",computable,1,sep:closeadj,,
+MomSeason06YrPlus,Price,1,"Heston and Sadka (2008), JFE",computable,1,sep:closeadj,,needs 10y history: early years sparse
+MomSeason11YrPlus,Price,1,"Heston and Sadka (2008), JFE",computable,1,sep:closeadj,,needs 15y history: early years sparse
+MomSeason16YrPlus,Price,1,"Heston and Sadka (2008), JFE",computable,1,sep:closeadj,,needs 20y history: mostly post-2017
+MomSeasonShort,Price,1,"Heston and Sadka (2008), JFE",computable,1,sep:closeadj,,
+Price,Price,-1,"Blume and Husic (1973), JF",computable,1,sep:closeunadj,,
+ReturnSkew,Price,-1,"Bali, Engle and Murray (2015), Book",computable,1,sep:closeadj,,
+BidAskSpread,Trading,1,"Amihud and Mendelson (1986), JFE",computable,1,"sep:high,low,close",,Corwin-Schultz: rejected as a COST estimate (Step 31) but kept as OSAP defines the signal
+DolVol,Trading,-1,"Brennan, Chordia, Subra (1998), JFE",computable,1,"sep:closeunadj,volume",,
+Illiquidity,Trading,1,"Amihud (2002), JFM",computable,1,"sep:closeadj,closeunadj,volume",,
+VolumeTrend,Trading,-1,"Haugen and Baker (1996), JFE",computable,1,sep:volume,,
+AM,Accounting,1,"Fama and French (1992), JF",computable,2,sf1:assets; sep,,
+BMdec,Accounting,1,"Fama and French (1992), JF",computable,2,sf1:equityusd; sep,,
+CF,Accounting,1,"Lakonishok, Shleifer, Vishny (1994), JF",computable,2,"sf1:netinc,depamor; sep",,
+Cash,Accounting,1,"Palazzo (2012), JFE",computable,2,"sf1:cashneq,assets (quarterly)",,
+CashProd,Accounting,-1,"Chandrashekar and Rao (2009), WP",computable,2,"sf1:cashneq,assets; sep",,
+ChAssetTurnover,Accounting,1,"Soliman (2008), AR",computable,2,sf1:assetturnover,,
+ChEQ,Accounting,-1,"Lockwood and Prombutr (2010), JFR",computable,2,sf1:equity,,
+ChInv,Accounting,-1,"Thomas and Zhang (2002), RAS",computable,2,"sf1:inventory,assets",,
+ChNNCOA,Accounting,-1,"Soliman (2008), AR",computable,2,"sf1:assets,assetsc,investmentsnc,liabilities,debtc,debtnc",,
+ChNWC,Accounting,-1,"Soliman (2008), AR",computable,2,"sf1:assetsc,cashneq,liabilitiesc,debtc,assets",,
+ChTax,Accounting,1,"Thomas and Zhang (2011), JAR",computable,2,"sf1:taxexp,assets (quarterly)",,
+CompositeDebtIssuance,Accounting,-1,"Lyandres, Sun and Zhang (2008), RFS",computable,2,sf1:debt,,
+DelCOA,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:assetsc,cashneq,assets",,
+DelCOL,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:liabilitiesc,debtc,assets",,
+DelDRC,Accounting,1,"Prakash and Sinha (2013), CAR",computable,2,"sf1:deferredrev,assets,equity",,
+DelEqu,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:equity,assets",,
+DelLTI,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:investmentsnc,assets",,
+EntMult,Accounting,-1,"Loughran and Wellman (2011), JFQA",computable,2,"sf1:ev,ebitda",,
+GrSaleToGrInv,Accounting,1,"Abarbanell and Bushee (1998), AR",computable,2,"sf1:revenue,inventory",,
+GrSaleToGrOverhead,Accounting,1,"Abarbanell and Bushee (1998), AR",computable,2,"sf1:revenue,sgna",,
+Investment,Accounting,-1,"Titman, Wei and Xie (2004), JFQA",computable,2,"sf1:capex,revenue",,
+Leverage,Accounting,1,"Bhandari (1988), JF",computable,2,sf1:liabilities; sep,,
+NOA,Accounting,-1,"Hirshleifer et al. (2004), JAE",computable,2,"sf1:assets,cashneq,debt,equity",,
+NetDebtFinance,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfdebt,assets",,Sharadar reports net debt issuance
+NetEquityFinance,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfcommon,assets",,Sharadar reports net equity issuance
+NumEarnIncrease,Accounting,1,"Loh and Warachka (2012), MS",computable,2,sf1:netinc (quarterly),,
+OPLeverage,Accounting,1,"Novy-Marx (2011), ROF",computable,2,"sf1:sgna,cor,assets",,
+OperProf,Accounting,1,"Fama and French (2006), JFE",computable,2,"sf1:revenue,cor,sgna,intexp,equity",,
+OperProfRD,Accounting,1,"Ball et al. (2016), JFE",computable,2,"sf1:revenue,cor,sgna,rnd,assets",,
+PctAcc,Accounting,-1,"Hafzalla, Lundholm, Van Winkle (2011), AR",computable,2,"sf1:netinc,ncfo",,
+RD,Accounting,1,"Chan, Lakonishok and Sougiannis (2001), JF",computable,2,sf1:rnd; sep,,
+RoE,Accounting,1,"Haugen and Baker (1996), JFE",computable,2,"sf1:netinc,equity",,
+SP,Accounting,1,"Barbee, Mukherji and Raines (1996), FAJ",computable,2,sf1:revenue; sep,,
+ShareIss1Y,Accounting,-1,"Pontiff and Woodgate (2008), JF",computable,2,sf1:sharesbas; actions:split,,split-restated shares (Step 11)
+ShareIss5Y,Accounting,-1,"Daniel and Titman (2006), JF",computable,2,sf1:sharesbas; actions:split,,split-restated shares (Step 11)
+SurpriseRD,Accounting,1,"Eberhart, Maxwell and Siddique (2004), JF",computable,2,"sf1:rnd,revenue,assets",,
+TotalAccruals,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:assetsc,cashneq,liabilitiesc,debtc,assets,liabilities,investmentsnc,debtnc,investmentsc",,
+XFIN,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfcommon,ncfdiv,ncfdebt,assets",,
+cfp,Accounting,1,"Desai, Rajgopal, Venkatachalam (2004), AR",computable,2,sf1:ncfo; sep,,
+dNoa,Accounting,-1,"Hirshleifer, Hou, Teoh, Zhang (2004), JAE",computable,2,"sf1:assets,cashneq,debt,equity",,
+grcapx,Accounting,-1,"Anderson and Garcia-Feijoo (2006), JF",computable,2,sf1:capex,,
+grcapx3y,Accounting,-1,"Anderson and Garcia-Feijoo (2006), JF",computable,2,sf1:capex,,
+roaq,Accounting,1,"Balakrishnan, Bartov and Faurel (2010), JAE",computable,2,"sf1:netinc,assets (quarterly)",,
+tang,Accounting,1,"Hahn and Lee (2009), JF",computable,2,"sf1:cashneq,receivables,inventory,ppnenet,assets",,
+MomRev,Price,1,"Chan and Ko (2006), JOIM",computable,2,sep:closeadj,,quintile combination of Mom6m and 36m return
+MomVol,Price,1,"Lee and Swaminathan (2000), JF",computable,2,"sep:closeadj,volume; sf1:sharesbas",,
+ShareVol,Trading,-1,"Datar, Naik and Radcliffe (1998), JFM",computable,2,sep:volume; sf1:sharesbas,,
+VolMkt,Trading,-1,"Haugen and Baker (1996), JFE",computable,2,"sep:closeunadj,volume; sf1:sharesbas",,
+std_turn,Trading,-1,"Chordia, Subra, Anshuman (2001), JFE",computable,2,sep:volume; sf1:sharesbas,,
+zerotrade12M,Trading,1,"Liu (2006), JFE",computable,2,sep:volume; sf1:sharesbas,,
+zerotrade1M,Trading,1,"Liu (2006), JFE",computable,2,sep:volume; sf1:sharesbas,,
+zerotrade6M,Trading,1,"Liu (2006), JFE",computable,2,sep:volume; sf1:sharesbas,,
+AbnormalAccruals,Accounting,-1,"Xie (2001), AR",computable,3,"sf1:netinc,ncfo,assets,revenue,receivables,ppnenet; tickers:siccode",,industry-year regression residual
+AccrualsBM,Accounting,1,"Bartov and Kim (2004), RFQA",computable,3,"sf1:assetsc,cashneq,liabilitiesc,debtc,depamor,equityusd",,quintile combination of Accruals and BM
+ChInvIA,Accounting,-1,"Abarbanell and Bushee (1998), AR",computable,3,sf1:capex; tickers:siccode,,industry-adjusted
+CompEquIss,Accounting,-1,"Daniel and Titman (2006), JF",computable,3,sep:closeadj; sf1:sharesbas,,5-year market cap growth minus 5-year return
+DivYieldST,Accounting,1,"Litzenberger and Ramaswamy (1979), JFE",computable,3,actions:dividend; sep,,dividend history from ACTIONS
+EarnSupBig,Accounting,1,"Hou (2007), RFS",computable,3,sf1:eps (quarterly); tickers:famaindustry,,
+EarningsConsistency,Accounting,1,"Alwathainani (2009), BAR",computable,3,sf1:eps,,
+EarningsSurprise,Accounting,1,"Foster, Olsen and Shevlin (1984), AR",computable,3,sf1:eps (quarterly),,seasonal random-walk SUE
+EquityDuration,Accounting,-1,"Dechow, Sloan and Soliman (2004), RAS",computable,3,"sf1:equity,netinc,revenue; sep",,multi-year forecast formula (Dechow et al.)
+IntanBM,Accounting,-1,"Daniel and Titman (2006), JF",computable,3,sf1:equityusd; sep:closeadj,,regression on 5-year returns
+IntanCFP,Accounting,-1,"Daniel and Titman (2006), JF",computable,3,"sf1:netinc,depamor; sep:closeadj",,regression on 5-year returns
+IntanEP,Accounting,-1,"Daniel and Titman (2006), JF",computable,3,sf1:netinc; sep:closeadj,,regression on 5-year returns
+IntanSP,Accounting,-1,"Daniel and Titman (2006), JF",computable,3,sf1:revenue; sep:closeadj,,regression on 5-year returns
+InvGrowth,Accounting,-1,"Belo and Lin (2012), RFS",computable,3,sf1:inventory; tickers:siccode,fred:GNPDEF,
+MeanRankRevGrowth,Accounting,1,"Lakonishok, Shleifer, Vishny (1994), JF",computable,3,sf1:revenue,,
+OrgCap,Accounting,1,"Eisfeldt and Papanikolaou (2013), JF",computable,3,"sf1:sgna,assets",fred:GNPDEF,perpetual-inventory capital from SG&A
+PS,Accounting,1,"Piotroski (2000), JAR",computable,3,"sf1:netinc,ncfo,assets,debtnc,currentratio,grossmargin,assetturnover,sharesbas",,Piotroski 9-point score
+RDAbility,Accounting,1,"Cohen, Diether and Malloy (2013), RFS",computable,3,"sf1:rnd,revenue",,firm-level regressions over 8 years
+RDcap,Accounting,1,"Li (2011), RFS",computable,3,"sf1:rnd,assets",,
+RevenueSurprise,Accounting,1,"Jegadeesh and Livnat (2006), JAE",computable,3,"sf1:revenue,sharesbas (quarterly)",,
+VarCF,Accounting,-1,"Haugen and Baker (1996), JFE",computable,3,"sf1:netinc,depamor; sep",,
+DivInit,Event,1,"Michaely, Thaler and Womack (1995), JF",computable,3,actions:dividend,,
+DivOmit,Event,-1,"Michaely, Thaler and Womack (1995), JF",computable,3,actions:dividend,,
+DivSeason,Event,1,"Hartzmark and Salomon (2013), JFE",computable,3,actions:dividend,,
+ExchSwitch,Event,-1,"Dharan and Ikenberry (1995), JF",computable,3,"actions:exchangefrom,exchangeto",,
+Spinoff,Event,1,"Cusatis, Miles and Woolridge (1993), JFE",computable,3,actions:spunofffrom,,
+Herf,Other,-1,"Hou and Robinson (2006), JF",computable,3,sf1:revenue; tickers:siccode,,current SIC code
+HerfAsset,Other,-1,"Hou and Robinson (2006), JF",computable,3,sf1:assets; tickers:siccode,,current SIC code
+HerfBE,Other,-1,"Hou and Robinson (2006), JF",computable,3,sf1:equity; tickers:siccode,,current SIC code
+Beta,Price,1,"Fama and MacBeth (1973), JPE",computable,3,sep:closeadj,"kenfrench:mktrf,rf",
+BetaFP,Price,1,"Frazzini and Pedersen (2014), JFE",computable,3,sep:closeadj,"kenfrench:mktrf,rf",
+BetaLiquidityPS,Price,1,"Pastor and Stambaugh (2003), JPE",computable,3,sep:closeadj,pastor:liquidity; kenfrench:rf,new free source (Pastor website): ask before adding
+BetaTailRisk,Price,1,"Kelly and Jiang (2014), RFS",computable,3,sep:closeadj,,tail measure from all firms' daily returns
+CoskewACX,Price,-1,"Ang, Chen and Xing (2006), RFS",computable,3,sep:closeadj,"kenfrench:mktrf,rf",
+Coskewness,Price,-1,"Harvey and Siddique (2000), JF",computable,3,sep:closeadj,"kenfrench:mktrf,rf",
+IdioVol3F,Price,-1,"Ang et al. (2006), JF",computable,3,sep:closeadj,kenfrench:ff3,
+IdioVolAHT,Price,-1,"Ali, Hwang, and Trombley (2003), JFE",computable,3,sep:closeadj,"kenfrench:mktrf,rf",
+IndMom,Price,1,"Grinblatt and Moskowitz (1999), JF",computable,3,sep:closeadj; tickers:siccode,,industry = current SIC code (no SIC history kept)
+IndRetBig,Price,1,"Hou (2007), RFS",computable,3,sep:closeadj; tickers:famaindustry,,current Fama-French industry
+PriceDelayRsq,Price,1,"Hou and Moskowitz (2005), RFS",computable,3,sep:closeadj,kenfrench:mktrf,
+PriceDelaySlope,Price,1,"Hou and Moskowitz (2005), RFS",computable,3,sep:closeadj,kenfrench:mktrf,
+PriceDelayTstat,Price,1,"Hou and Moskowitz (2005), RFS",computable,3,sep:closeadj,kenfrench:mktrf,
+RealizedVol,Price,-1,"Ang et al. (2006), JF",computable,3,sep:closeadj,"kenfrench:mktrf,rf",CAPM residual vol; differs from our vol_3m (total vol)
+ResidualMomentum,Price,1,"Blitz, Huij and Martens (2011), JEmpFin",computable,3,sep:closeadj,kenfrench:ff3,
+ReturnSkew3F,Price,-1,"Bali, Engle and Murray (2015), Book",computable,3,sep:closeadj,kenfrench:ff3,
+TrendFactor,Price,1,"Han, Zhou, Zhu (2016), JFE",computable,3,sep:closeadj,,moving averages combined by cross-sectional regression
+betaVIX,Price,-1,"Ang et al. (2006), JF",computable,3,sep:closeadj,"fred:VIXCLS; kenfrench:mktrf,rf",
+FirmAge,Other,-1,"Barry and Brown (1984), JFE",approximate,1,tickers:firstpricedate,,"months since first Sharadar price, truncated for old firms"
+VolSD,Trading,-1,"Chordia, Subra, Anshuman (2001), JFE",approximate,1,sep:volume; tickers:exchange,,NYSE filter uses current exchange only
+Accruals,Accounting,-1,"Sloan (1996), AR",approximate,2,"sf1:assetsc,cashneq,liabilitiesc,debtc,depamor",,no income-taxes-payable field: term dropped
+BPEBM,Accounting,-1,"Penman, Richardson and Tuna (2007), JAR",approximate,2,"sf1:equity,cashneq,debt; sep",,no preferred arrears / treasury stock
+BookLeverage,Accounting,-1,"Fama and French (1992), JF",approximate,2,"sf1:assets,equity,taxliabilities",,deferred taxes ~ taxliabilities; no separate preferred stock
+CBOperProf,Accounting,1,"Ball et al. (2016), JFE",approximate,2,"sf1:revenue,cor,sgna,rnd,receivables,inventory,deferredrev,payables,assets",,no prepaid / accrued expenses fields
+DebtIssuance,Accounting,-1,"Spiess and Affleck-Graves (1999), JFE",approximate,2,sf1:ncfdebt,,net (not gross) debt issuance > 0
+DelFINL,Accounting,-1,"Richardson et al. (2005), JAE",approximate,2,"sf1:debt,assets",,no separate preferred stock field
+DelNetFin,Accounting,1,"Richardson et al. (2005), JAE",approximate,2,"sf1:investmentsc,investmentsnc,debt,assets",,no separate preferred stock
+EBM,Accounting,1,"Penman, Richardson and Tuna (2007), JAR",approximate,2,"sf1:equity,cashneq,debt; sep",,no deferred charges / preferred arrears / treasury stock
+EP,Accounting,1,"Basu (1977), JF",approximate,2,sf1:netinc; sep; tickers:exchange,,NYSE filter uses current exchange
+InvestPPEInv,Accounting,-1,"Lyandres, Sun and Zhang (2008), RFS",approximate,2,"sf1:ppnenet,inventory,assets",,gross PPE unavailable: net used
+NetDebtPrice,Accounting,-1,"Penman, Richardson and Tuna (2007), JAR",approximate,2,"sf1:debt,cashneq; sep",,no preferred / arrears / treasury stock fields
+NetPayoutYield,Accounting,1,"Boudoukh et al. (2007), JF",approximate,2,"sf1:ncfdiv,ncfcommon; sep",,net (not gross) repurchases; no preferred
+PayoutYield,Accounting,1,"Boudoukh et al. (2007), JF",approximate,2,"sf1:ncfdiv,ncfcommon; sep",,net (not gross) repurchases
+PctTotAcc,Accounting,-1,"Hafzalla, Lundholm, Van Winkle (2011), AR",approximate,2,"sf1:netinc,ncfcommon,ncfdiv,ncfo,ncfi,ncfdebt",,net (not gross) equity flows
+ShareRepurchase,Accounting,1,"Ikenberry, Lakonishok, Vermaelen (1995), JFE",approximate,2,sf1:ncfcommon,,net equity flow < 0 as repurchase proxy
+Tax,Accounting,1,"Lev and Nissim (2004), AR",approximate,2,"sf1:taxexp,netinc",,no foreign/federal split: total tax expense
+Frontier,Accounting,1,"Nguyen and Swanson (2009), JFQA",approximate,3,"sf1:equity,debtnc,assets,capex,revenue,rnd",,advertising regressor unavailable: dropped
+GrLTNOA,Accounting,1,"Fairfield, Whisenant and Yohn (2003), AR",approximate,3,"sf1:receivables,inventory,ppnenet,intangibles,payables,assets,depamor",,other current/long-term assets and liabilities unavailable
+MS,Accounting,1,"Mohanram (2005), RAS",approximate,3,"sf1:netinc,ncfo,assets,capex,rnd,revenue",,advertising component unavailable: dropped
+OScore,Accounting,-1,"Dichev (1998), JF",approximate,3,"sf1:assets,liabilities,assetsc,liabilitiesc,netinc,ncfo",fred:GNPDEF,funds from operations ~ ncfo
+RDS,Accounting,1,"Landsman et al. (2011), AR",approximate,3,"sf1:accoci,retearn,netinc,ncfdiv,equity; sep",,dirty surplus from AOCI only; no marketable-securities adjustment
+IndIPO,Event,-1,"Ritter (1991), JF",approximate,3,tickers:firstpricedate; actions:listed,,IPO date ~ first listing (Ritter IPO data not used)
+RDIPO,Event,-1,"Gou, Lev and Shi (2006), JBFA",approximate,3,sf1:rnd; tickers:firstpricedate,,IPO date ~ first listing
+FirmAgeMom,Price,1,"Zhang (2006), JF",approximate,3,sep:closeadj; tickers:firstpricedate,,"firm age from first Sharadar price, truncated for old firms"
+Activism1,13F,1,"Cremers and Nair (2005), JF",not_available,,,,needs institutional holdings (13F; Sharadar SF3 not in our bundle)
+Activism2,13F,1,"Cremers and Nair (2005), JF",not_available,,,,needs institutional holdings (13F; Sharadar SF3 not in our bundle)
+DelBreadth,13F,1,"Chen, Hong and Stein (2002), JFE",not_available,,,,needs institutional holdings (13F; Sharadar SF3 not in our bundle)
+IO_ShortInterest,13F,1,"Asquith Pathak and Ritter (2005), JFE",not_available,,,,needs institutional holdings (13F; Sharadar SF3 not in our bundle)
+RIO_Disp,13F,1,"Nagel (2005), JFE",not_available,,,,needs institutional holdings (13F; Sharadar SF3 not in our bundle)
+RIO_MB,13F,1,"Nagel (2005), JFE",not_available,,,,needs institutional holdings (13F; Sharadar SF3 not in our bundle)
+RIO_Turnover,13F,1,"Nagel (2005), JFE",not_available,,,,needs institutional holdings (13F; Sharadar SF3 not in our bundle)
+RIO_Volatility,13F,1,"Nagel (2005), JFE",not_available,,,,needs institutional holdings (13F; Sharadar SF3 not in our bundle)
+AdExp,Accounting,1,"Chan, Lakonishok and Sougiannis (2001), JF",not_available,,,,needs advertising expense
+BrandInvest,Accounting,-1,"Belo, Lin and Vitorino (2014), RED",not_available,,,,needs advertising expense
+ConvDebt,Accounting,-1,"Valta (2016), JFQA",not_available,,,,needs deferred charges / convertible-reserved shares
+EarningsStreak,Accounting,1,"Loh and Warachka (2012), MS",not_available,,,,needs analyst forecasts (IBES)
+FR,Accounting,1,"Franzoni and Marin (2006), JF",not_available,,,,needs pension plan data
+GrAdExp,Accounting,-1,"Lou (2014), RFS",not_available,,,,needs advertising expense
+OrderBacklog,Accounting,-1,"Rajgopal, Shevlin, Venkatachalam (2003), RAS",not_available,,,,needs order backlog
+OrderBacklogChg,Accounting,1,"Baik and Ahn (2007), Other",not_available,,,,needs order backlog
+PredictedFE,Accounting,-1,"Frankel and Lee (1998), JAE",not_available,,,,needs analyst forecasts (IBES)
+realestate,Accounting,1,"Tuzel (2010), RFS",not_available,,,,needs real-estate PPE breakdown
+AOP,Analyst,-1,"Frankel and Lee (1998), JAE",not_available,,,,needs analyst forecasts (IBES)
+AnalystRevision,Analyst,1,"Hawkins, Chamberlin, Daniel (1984), FAJ",not_available,,,,needs analyst forecasts (IBES)
+AnalystValue,Analyst,1,"Frankel and Lee (1998), JAE",not_available,,,,needs analyst forecasts (IBES)
+ChForecastAccrual,Analyst,1,"Barth and Hutton (2004), RAS",not_available,,,,needs analyst forecasts (IBES)
+ChNAnalyst,Analyst,-1,"Scherbina (2008), ROF",not_available,,,,needs analyst forecasts (IBES)
+ChangeInRecommendation,Analyst,1,"Jegadeesh et al. (2004), JF",not_available,,,,needs analyst forecasts (IBES)
+ConsRecomm,Analyst,-1,"Barber et al. (2001), JF",not_available,,,,needs analyst forecasts (IBES)
+CredRatDG,Analyst,-1,"Dichev and Piotroski (2001), JF",not_available,,,,needs analyst forecasts (IBES)
+DownRecomm,Analyst,-1,"Barber et al. (2001), JF",not_available,,,,needs analyst forecasts (IBES)
+EarningsForecastDisparity,Analyst,-1,"Da and Warachka (2011), JFE",not_available,,,,needs analyst forecasts (IBES)
+ExclExp,Analyst,-1,"Doyle, Lundholm and Soliman (2003), RAS",not_available,,,,needs analyst forecasts (IBES)
+FEPS,Analyst,1,"Cen, Wei, and Zhang (2006), WP",not_available,,,,needs analyst forecasts (IBES)
+ForecastDispersion,Analyst,-1,"Diether, Malloy and Scherbina (2002), JF",not_available,,,,needs analyst forecasts (IBES)
+REV6,Analyst,1,"Chan, Jegadeesh and Lakonishok (1996), JF",not_available,,,,needs analyst forecasts (IBES)
+Recomm_ShortInterest,Analyst,1,"Drake, Rees and Swanson (2011), AR",not_available,,,,needs analyst forecasts (IBES)
+UpRecomm,Analyst,1,"Barber et al. (2001), JF",not_available,,,,needs analyst forecasts (IBES)
+fgr5yrLag,Analyst,-1,"La Porta (1996), JF",not_available,,,,needs analyst forecasts (IBES)
+sfe,Analyst,1,"Elgers, Lo and Pfeiffer (2001), AR",not_available,,,,needs analyst forecasts (IBES)
+AgeIPO,Event,1,"Ritter (1991), JF",not_available,,,,needs founding year (Ritter IPO data)
+CPVolSpread,Options,1,"Bali and Hovakimian (2009), MS",not_available,,,,needs option data (OptionMetrics)
+OptionVolume1,Options,-1,"Johnson and So (2012), JFE",not_available,,,,needs option data (OptionMetrics)
+OptionVolume2,Options,-1,"Johnson and So (2012), JFE",not_available,,,,needs option data (OptionMetrics)
+RIVolSpread,Options,-1,"Bali and Hovakimian (2009), MS",not_available,,,,needs option data (OptionMetrics)
+SmileSlope,Options,-1,"Yan (2011), JFE",not_available,,,,needs option data (OptionMetrics)
+dCPVolSpread,Options,-1,"An, Ang, Bali, Cakici (2014), JF",not_available,,,,needs option data (OptionMetrics)
+dVolCall,Options,1,"An, Ang, Bali, Cakici (2014), JF",not_available,,,,needs option data (OptionMetrics)
+dVolPut,Options,-1,"An, Ang, Bali, Cakici (2014), JF",not_available,,,,needs option data (OptionMetrics)
+skew1,Options,-1,"Xing, Zhang and Zhao (2010), JFQA",not_available,,,,needs option data (OptionMetrics)
+CitationsRD,Other,1,"Hirschleifer, Hsu and Li (2013), JFE",not_available,,,,needs patent citation data
+CustomerMomentum,Other,1,"Cohen and Frazzini (2008), JF",not_available,,,,needs customer links (segment data)
+Governance,Other,-1,"Gompers, Ishii and Metrick (2003), QJE",not_available,,,,needs governance index
+PatentsRD,Other,1,"Hirschleifer, Hsu and Li (2013), JFE",not_available,,,,needs patent data
+hire,Other,-1,"Bazdresch, Belo and Lin (2014), JPE",not_available,,,,needs employee counts
+iomom_cust,Other,1,"Menzly and Ozbas (2010), JF",not_available,,,,needs BEA input-output links
+iomom_supp,Other,1,"Menzly and Ozbas (2010), JF",not_available,,,,needs BEA input-output links
+sinAlgo,Other,1,"Hong and Kacperczyk (2009), JFE",not_available,,,,needs segment data
+AnnouncementReturn,Price,1,"Chan, Jegadeesh and Lakonishok (1996), JF",not_available,,,,needs earnings announcement dates (IBES); SF1 filing date is not the announcement
+Mom6mJunk,Price,1,"Avramov et al (2007), JF",not_available,,,,needs credit ratings
+retConglomerate,Price,1,"Cohen and Lou (2012), JFE",not_available,,,,needs Compustat segment data
+ProbInformedTrading,Trading,1,"Easley, Hvidkjaer and O'Hara (2002), JF",not_available,,,,needs PIN estimates (archived academic data)
+ShortInterest,Trading,-1,"Dechow et al. (2001), JFE",not_available,,,,needs short interest data
