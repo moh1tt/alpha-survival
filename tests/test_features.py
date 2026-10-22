@@ -340,3 +340,66 @@ def test_mom_rev_flags_recent_winners_that_were_long_run_losers():
     assert last.loc[[0, 1]].tolist() == [1.0, 1.0]
     assert last.loc[[8, 9]].tolist() == [0.0, 0.0]
     assert last.loc[2:7].isna().all()
+
+
+def test_season_lag_sets_match_osap():
+    lags = features.SEASONAL_LAGS
+    assert lags["mom_season_short"] == [11]
+    assert lags["mom_season"] == [23, 35, 47, 59]
+    assert lags["mom_season_16y"] == [191, 203, 215, 227, 239]
+    assert lags["mom_offseason_12m"] == list(range(1, 11))
+    assert lags["mom_offseason"] == [k for k in range(12, 60) if k not in (23, 35, 47, 59)]
+    assert len(lags["mom_offseason_6y"]) == 55 and 71 not in lags["mom_offseason_6y"]
+
+
+def seasonal_panel(n_months=70, permaticker=1):
+    """Returns encode their own month index, so any average can be checked by hand."""
+    rets = [np.nan] + [0.001 * i for i in range(1, n_months)]
+    return panel_for(permaticker, rets, start="2000-01-31")
+
+
+def test_seasonality_averages_exactly_its_lags():
+    out = features.add_seasonality(seasonal_panel())
+    t = 65  # forecasting month 66 (a July if month 0 is Jan 2000)
+    assert out["mom_season_short"].iloc[t] == pytest.approx(0.001 * (t - 11))
+    assert out["mom_season"].iloc[t] == pytest.approx(
+        np.mean([0.001 * (t - k) for k in (23, 35, 47, 59)])
+    )
+    assert out["mom_offseason_12m"].iloc[t] == pytest.approx(
+        np.mean([0.001 * (t - k) for k in range(1, 11)])
+    )
+    # Calendar check: lag 11 from row t is the same calendar month as t + 1, a year earlier.
+    months = out["month_end"]
+    assert (months.iloc[t] - pd.DateOffset(months=11)).month == (
+        months.iloc[t] + pd.offsets.MonthEnd(1)
+    ).month
+
+
+def test_seasonality_uses_available_lags_and_is_nan_with_none():
+    out = features.add_seasonality(seasonal_panel(n_months=40))
+    t = 39  # only lags 23 and 35 of mom_season exist (47, 59 predate the data)
+    assert out["mom_season"].iloc[t] == pytest.approx(np.mean([0.001 * 16, 0.001 * 4]))
+    assert out["mom_season"].iloc[:23].isna().all()  # no lag 23 yet
+    assert out["mom_season_6y"].isna().all()  # 6+ years of history never exists
+
+
+def test_seasonality_lags_by_calendar_month_across_a_gap():
+    # Drop a row: with row shifts, lag 11 would land a month too far back.
+    full = features.add_seasonality(seasonal_panel()).set_index("month_end")
+    gappy = features.add_seasonality(seasonal_panel().drop(index=30)).set_index("month_end")
+    t = full.index[60]  # lag 11 = month 49, after the gap: unaffected
+    assert gappy.loc[t, "mom_season_short"] == full.loc[t, "mom_season_short"]
+    t41 = full.index[41]  # lag 11 = month 30, the missing month -> NaN
+    assert np.isnan(gappy.loc[t41, "mom_season_short"])
+
+
+def test_seasonality_ignores_current_month_target_and_future_and_other_stocks():
+    base = features.add_seasonality(seasonal_panel())
+    shocked = seasonal_panel()
+    shocked.loc[50:, "ret"] = 9.0
+    shocked["fwd_ret"] = 99.0
+    other = seasonal_panel(permaticker=2).assign(ret=-0.5)
+    out = features.add_seasonality(pd.concat([shocked, other], ignore_index=True))
+    out = out[out["permaticker"] == 1].reset_index(drop=True)
+    cols = list(features.SEASONAL_LAGS)
+    pd.testing.assert_frame_equal(out.loc[:49, cols], base.loc[:49, cols])

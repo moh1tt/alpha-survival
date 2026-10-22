@@ -89,6 +89,71 @@ def add_past_returns(panel: pd.DataFrame) -> pd.DataFrame:
     return panel.assign(**added, mom_rev=mom_rev)
 
 
+def _season_lags(first_year: int, last_year: int) -> list[int]:
+    """Lags hitting the forecast month's calendar month in those past years.
+
+    The row at t forecasts month t+1, so year y back is lag 12y - 1 (11, 23, ...).
+    """
+    return [12 * y - 1 for y in range(first_year, last_year + 1)]
+
+
+def _off_season_lags(first_year: int, last_year: int) -> list[int]:
+    """All lags in those past years except the forecast month's calendar month."""
+    season = set(_season_lags(first_year, last_year))
+    return [k for k in range(12 * (first_year - 1), 12 * last_year) if k not in season]
+
+
+# Seasonality (OSAP's code; Heston & Sadka 2008 and follow-ups): average monthly
+# return over sets of past months, as lags. Same-month averages predict positively,
+# other-month averages negatively (see run.PUBLISHED_SIGN).
+SEASONAL_LAGS = {
+    "mom_season_short": _season_lags(1, 1),  # MomSeasonShort: lag 11
+    "mom_season": _season_lags(2, 5),  # MomSeason
+    "mom_season_6y": _season_lags(6, 10),  # MomSeason06YrPlus
+    "mom_season_11y": _season_lags(11, 15),  # MomSeason11YrPlus
+    "mom_season_16y": _season_lags(16, 20),  # MomSeason16YrPlus
+    "mom_offseason_12m": list(range(1, 11)),  # Mom12mOffSeason: lags 1-10
+    "mom_offseason": _off_season_lags(2, 5),  # MomOffSeason
+    "mom_offseason_6y": _off_season_lags(6, 10),  # MomOffSeason06YrPlus
+    "mom_offseason_11y": _off_season_lags(11, 15),  # MomOffSeason11YrPlus
+    "mom_offseason_16y": _off_season_lags(16, 20),  # MomOffSeason16YrPlus
+}
+
+
+def add_seasonality(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add each `SEASONAL_LAGS` feature: the mean `ret` over its lags.
+
+    Lags are calendar months, not rows: returns are laid out on a full month x
+    stock grid, so a stock's gap can never shift which calendar month a lag hits.
+    Missing months are skipped, as in OSAP (who count them as 0% instead); NaN
+    only if none of the lags has a return. Earlier months only: no look-ahead.
+    """
+    panel = _sorted_by_stock(panel)
+    wide = panel.pivot(index="month_end", columns="permaticker", values="ret")
+    calendar = pd.date_range(wide.index.min(), wide.index.max(), freq="ME")
+    if not wide.index.isin(calendar).all():
+        raise ValueError("month_end values must be calendar month ends")
+    grid = wide.reindex(calendar).to_numpy()
+    rows = calendar.get_indexer(panel["month_end"])
+    cols = wide.columns.get_indexer(panel["permaticker"])
+
+    added = {}
+    for name, lags in SEASONAL_LAGS.items():
+        total, count = np.zeros_like(grid), np.zeros_like(grid)
+        for lag in lags:
+            if lag >= len(grid):
+                continue
+            past = np.full_like(grid, np.nan)
+            past[lag:] = grid[:-lag]
+            seen = ~np.isnan(past)
+            total += np.where(seen, past, 0.0)
+            count += seen
+        with np.errstate(invalid="ignore", divide="ignore"):
+            mean = np.where(count > 0, total / count, np.nan)
+        added[name] = mean[rows, cols]
+    return panel.assign(**added)
+
+
 def add_profitability(panel: pd.DataFrame) -> pd.DataFrame:
     """Add `gp_a`: gross profit (trailing twelve months) over total assets.
 
