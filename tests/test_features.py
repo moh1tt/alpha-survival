@@ -697,3 +697,76 @@ def test_book_payout_debt_ratios_ignore_later_months_and_other_stocks():
     out = features.add_book_payout_debt_ratios(pd.concat([shocked, other], ignore_index=True))
     out = out[out["permaticker"] == 1].reset_index(drop=True)
     pd.testing.assert_frame_equal(out.loc[:29, cols], base.loc[:29, cols])
+
+
+def profit_panel(n_months=14, permaticker=1, **overrides):
+    """One stock's monthly rows with round income-statement and balance-sheet numbers."""
+    base = {
+        "revenue": 1000.0,
+        "cor": 600.0,
+        "sgna": 150.0,  # excludes R&D, as in Sharadar
+        "intexp": 10.0,
+        "taxexp": 35.0,
+        "receivables": 100.0,
+        "inventory": 80.0,
+        "deferredrev": 20.0,
+        "payables": 60.0,
+        "ppnenet": 400.0,
+        "sic_code": 3571.0,
+    }
+    frame = payout_panel(n_months=n_months, permaticker=permaticker, **base)
+    for col, value in overrides.items():
+        frame[col] = value
+    return frame
+
+
+def test_profitability_ratios_by_hand():
+    out = features.add_profitability_ratios(profit_panel()).iloc[-1]
+    # assets 2000, equity 800, netinc 50, rnd 20 (accounting_row)
+    assert out["roe"] == pytest.approx(50 / 800)
+    assert out["oper_prof"] == pytest.approx((1000 - 600 - 150 - 20 - 10) / 800)
+    assert out["oper_prof_rd"] == pytest.approx((1000 - 600 - 150) / 2000)
+    assert out["cb_oper_prof"] == pytest.approx((1000 - 600 - 150) / 2000)  # no changes
+    assert out["op_leverage"] == pytest.approx((600 + 150 + 20) / 2000)
+    assert out["tax"] == pytest.approx(35 / 0.35 / 50)
+    assert out["tang"] == pytest.approx((100 + 0.715 * 100 + 0.547 * 80 + 0.535 * 400) / 2000)
+
+
+def test_cash_based_profit_subtracts_twelve_month_working_capital_increases():
+    panel = profit_panel()
+    panel.loc[13, ["receivables", "inventory", "deferredrev", "payables"]] = [130, 90, 25, 70]
+    out = features.add_profitability_ratios(panel)
+    expected = (1000 - 600 - 150) - 30 - 10 + 5 + 10
+    assert out["cb_oper_prof"].iloc[13] == pytest.approx(expected / 2000)
+    assert out["cb_oper_prof"].iloc[:12].isna().all()  # no row 12 months earlier
+
+
+def test_profitability_exclusions():
+    bank = features.add_profitability_ratios(profit_panel(sic_code=6022.0))
+    assert bank[["oper_prof_rd", "cb_oper_prof", "tang"]].isna().all().all()
+    assert bank["roe"].notna().all()
+    loss = features.add_profitability_ratios(profit_panel(netinc=-10.0)).iloc[-1]
+    assert loss["tax"] == 1.0  # pays tax on a loss
+    refund = features.add_profitability_ratios(profit_panel(netinc=-10.0, taxexp=-5.0)).iloc[-1]
+    assert refund["tax"] == pytest.approx(-5 / 0.35 / -10)
+    no_rnd = features.add_profitability_ratios(profit_panel(rnd=np.nan)).iloc[-1]
+    assert no_rnd["op_leverage"] == pytest.approx((600 + 150) / 2000)
+
+
+def test_oper_prof_drops_the_smallest_third_by_market_cap():
+    stocks = [profit_panel(n_months=1, permaticker=k, market_cap=100.0 * (k + 1)) for k in range(6)]
+    out = features.add_profitability_ratios(pd.concat(stocks, ignore_index=True))
+    out = out.set_index("permaticker")
+    assert out.loc[[0, 1], "oper_prof"].isna().all()
+    assert out.loc[[2, 3, 4, 5], "oper_prof"].notna().all()
+
+
+def test_profitability_ratios_ignore_later_months_and_other_stocks():
+    cols = ["roe", "oper_prof_rd", "cb_oper_prof", "op_leverage", "tax", "tang"]
+    base = features.add_profitability_ratios(profit_panel(n_months=20))
+    shocked = profit_panel(n_months=20)
+    shocked.loc[shocked.index >= 15, ["receivables", "netinc", "assets"]] = [9e9, -9e9, 1.0]
+    other = profit_panel(n_months=20, permaticker=2, receivables=1e12)
+    out = features.add_profitability_ratios(pd.concat([shocked, other], ignore_index=True))
+    out = out[out["permaticker"] == 1].reset_index(drop=True)
+    pd.testing.assert_frame_equal(out.loc[:14, cols], base.loc[:14, cols])

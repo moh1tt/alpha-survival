@@ -85,6 +85,14 @@ FEATURE_ACRONYMS = {
     "net_debt_price": "NetDebtPrice",
     "ebm": "EBM",
     "bpebm": "BPEBM",
+    # Step 56: profitability
+    "roe": "RoE",
+    "oper_prof": "OperProf",
+    "oper_prof_rd": "OperProfRD",
+    "cb_oper_prof": "CBOperProf",
+    "op_leverage": "OPLeverage",
+    "tax": "Tax",
+    "tang": "tang",
 }
 
 

@@ -53,9 +53,9 @@ NOA,Accounting,-1,"Hirshleifer et al. (2004), JAE",computable,2,"sf1:assets,cash
 NetDebtFinance,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfdebt,assets",,Sharadar reports net debt issuance
 NetEquityFinance,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfcommon,assets",,Sharadar reports net equity issuance
 NumEarnIncrease,Accounting,1,"Loh and Warachka (2012), MS",computable,2,sf1:netinc (quarterly),,
-OPLeverage,Accounting,1,"Novy-Marx (2011), ROF",computable,2,"sf1:sgna,cor,assets",,
-OperProf,Accounting,1,"Fama and French (2006), JFE",computable,2,"sf1:revenue,cor,sgna,intexp,equity",,
-OperProfRD,Accounting,1,"Ball et al. (2016), JFE",computable,2,"sf1:revenue,cor,sgna,rnd,assets",,
+OPLeverage,Accounting,1,"Novy-Marx (2011), ROF",computable,2,"sf1:sgna,rnd,cor,assets",,
+OperProf,Accounting,1,"Fama and French (2006), JFE",computable,2,"sf1:revenue,cor,sgna,rnd,intexp,equity; sep",,
+OperProfRD,Accounting,1,"Ball et al. (2016), JFE",approximate,2,"sf1:revenue,cor,sgna,assets; tickers:siccode",,financials by current SIC code
 PctAcc,Accounting,-1,"Hafzalla, Lundholm, Van Winkle (2011), AR",computable,2,"sf1:netinc,ncfo",,
 RD,Accounting,1,"Chan, Lakonishok and Sougiannis (2001), JF",computable,2,sf1:rnd; sep,,
 RoE,Accounting,1,"Haugen and Baker (1996), JFE",computable,2,"sf1:netinc,equity",,
@@ -70,7 +70,7 @@ dNoa,Accounting,-1,"Hirshleifer, Hou, Teoh, Zhang (2004), JAE",computable,2,"sf1
 grcapx,Accounting,-1,"Anderson and Garcia-Feijoo (2006), JF",computable,2,sf1:capex,,
 grcapx3y,Accounting,-1,"Anderson and Garcia-Feijoo (2006), JF",computable,2,sf1:capex,,
 roaq,Accounting,1,"Balakrishnan, Bartov and Faurel (2010), JAE",computable,2,"sf1:netinc,assets (quarterly)",,
-tang,Accounting,1,"Hahn and Lee (2009), JF",computable,2,"sf1:cashneq,receivables,inventory,ppnenet,assets",,
+tang,Accounting,1,"Hahn and Lee (2009), JF",approximate,2,"sf1:cashneq,receivables,inventory,ppnenet,assets; tickers:siccode",,net (not gross) PP&E; manufacturers by current SIC code
 MomRev,Price,1,"Chan and Ko (2006), JOIM",computable,2,sep:closeadj,,quintile combination of Mom6m and 36m return
 MomVol,Price,1,"Lee and Swaminathan (2000), JF",computable,2,"sep:closeadj,volume; sf1:sharesbas",,
 ShareVol,Trading,-1,"Datar, Naik and Radcliffe (1998), JFM",computable,2,sep:volume; sf1:sharesbas,,
@@ -131,7 +131,7 @@ VolSD,Trading,-1,"Chordia, Subra, Anshuman (2001), JFE",computable,1,sep:volume,
 Accruals,Accounting,-1,"Sloan (1996), AR",approximate,2,"sf1:assetsc,cashneq,liabilitiesc,debtc,depamor",,no income-taxes-payable field: term dropped
 BPEBM,Accounting,-1,"Penman, Richardson and Tuna (2007), JAR",approximate,2,"sf1:equity,cashneq,debt; sep",,no preferred arrears / treasury stock
 BookLeverage,Accounting,-1,"Fama and French (1992), JF",approximate,2,"sf1:assets,equity,taxliabilities",,deferred taxes ~ taxliabilities; no separate preferred stock
-CBOperProf,Accounting,1,"Ball et al. (2016), JFE",approximate,2,"sf1:revenue,cor,sgna,rnd,receivables,inventory,deferredrev,payables,assets",,no prepaid / accrued expenses fields
+CBOperProf,Accounting,1,"Ball et al. (2016), JFE",approximate,2,"sf1:revenue,cor,sgna,receivables,inventory,deferredrev,payables,assets; tickers:siccode",,no prepaid / accrued expenses fields; financials by current SIC code
 DebtIssuance,Accounting,-1,"Spiess and Affleck-Graves (1999), JFE",approximate,2,sf1:ncfdebt,,net (not gross) debt issuance > 0
 DelFINL,Accounting,-1,"Richardson et al. (2005), JAE",approximate,2,"sf1:debt,assets",,no separate preferred stock field
 DelNetFin,Accounting,1,"Richardson et al. (2005), JAE",approximate,2,"sf1:investmentsc,investmentsnc,debt,assets",,no separate preferred stock
@@ -143,7 +143,7 @@ NetPayoutYield,Accounting,1,"Boudoukh et al. (2007), JF",approximate,2,"sf1:ncfd
 PayoutYield,Accounting,1,"Boudoukh et al. (2007), JF",approximate,2,"sf1:ncfdiv,ncfcommon,equity; sep; tickers:siccode",,net (not gross) repurchases; financials by current SIC code
 PctTotAcc,Accounting,-1,"Hafzalla, Lundholm, Van Winkle (2011), AR",approximate,2,"sf1:netinc,ncfcommon,ncfdiv,ncfo,ncfi,ncfdebt",,net (not gross) equity flows
 ShareRepurchase,Accounting,1,"Ikenberry, Lakonishok, Vermaelen (1995), JFE",approximate,2,sf1:ncfcommon,,net equity flow < 0 as repurchase proxy
-Tax,Accounting,1,"Lev and Nissim (2004), AR",approximate,2,"sf1:taxexp,netinc",,no foreign/federal split: total tax expense
+Tax,Accounting,1,"Lev and Nissim (2004), AR",approximate,2,"sf1:taxexp,netinc",,no current/deferred split: total tax expense
 Frontier,Accounting,1,"Nguyen and Swanson (2009), JFQA",approximate,3,"sf1:equity,debtnc,assets,capex,revenue,rnd",,advertising regressor unavailable: dropped
 GrLTNOA,Accounting,1,"Fairfield, Whisenant and Yohn (2003), AR",approximate,3,"sf1:receivables,inventory,ppnenet,intangibles,payables,assets,depamor",,other current/long-term assets and liabilities unavailable
 MS,Accounting,1,"Mohanram (2005), RAS",approximate,3,"sf1:netinc,ncfo,assets,capex,rnd,revenue",,advertising component unavailable: dropped

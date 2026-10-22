@@ -17,6 +17,13 @@ import pandas as pd
 MOMENTUM_MONTHS = 11
 
 
+def _with(panel: pd.DataFrame, **columns) -> pd.DataFrame:
+    """`panel.assign(**columns)` in one concat: assigning many columns one by one
+    fragments a wide frame (slow, and pandas warns)."""
+    added = pd.DataFrame(columns, index=panel.index)
+    return pd.concat([panel.drop(columns=[c for c in columns if c in panel]), added], axis=1)
+
+
 def _sorted_by_stock(panel: pd.DataFrame) -> pd.DataFrame:
     keys = ["permaticker", "month_end"]
     if panel.duplicated(keys).any():
@@ -49,7 +56,7 @@ def add_momentum(panel: pd.DataFrame) -> pd.DataFrame:
     gap in the price history never turns into a longer window passed off as a year.
     """
     panel = _sorted_by_stock(panel)
-    return panel.assign(mom_12_1=_past_return(panel, 1, MOMENTUM_MONTHS))
+    return _with(panel, mom_12_1=_past_return(panel, 1, MOMENTUM_MONTHS))
 
 
 # Other windows of past returns, as (first lag, last lag) in months, matching the
@@ -86,7 +93,7 @@ def add_past_returns(panel: pd.DataFrame) -> pd.DataFrame:
     mom_rev = pd.Series(np.nan, index=panel.index)
     mom_rev[(short_q == 5) & (long_q == 1)] = 1.0
     mom_rev[(short_q == 1) & (long_q == 5)] = 0.0
-    return panel.assign(**added, mom_rev=mom_rev)
+    return _with(panel, **added, mom_rev=mom_rev)
 
 
 def _season_lags(first_year: int, last_year: int) -> list[int]:
@@ -146,7 +153,7 @@ def add_seasonality(panel: pd.DataFrame) -> pd.DataFrame:
         with np.errstate(invalid="ignore", divide="ignore"):
             mean = np.where(count > 0, total / count, np.nan)
         added[name] = _at_rows(pd.DataFrame(mean), panel, returns)
-    return panel.assign(**added)
+    return _with(panel, **added)
 
 
 def _calendar_grid(panel: pd.DataFrame, column: str) -> pd.DataFrame:
@@ -221,7 +228,8 @@ def add_daily_price_signals(panel: pd.DataFrame) -> pd.DataFrame:
 
     with np.errstate(divide="ignore"):
         dol_vol = np.log(lagged.where(lagged > 0))
-    return panel.assign(
+    return _with(
+        panel,
         max_ret=panel["dret_max"],
         return_skew=skew,
         high_52=panel["close_split_adj"] / _at_rows(high, panel, close_max),
@@ -284,7 +292,8 @@ def add_trend_price_age(panel: pd.DataFrame) -> pd.DataFrame:
 
     age = _months_listed(panel)
 
-    return panel.assign(
+    return _with(
+        panel,
         volume_trend=_at_rows(trend, panel, volume),
         price=np.log(panel["close_unadj"].where(panel["close_unadj"] > 0)),
         firm_age=age.astype(float),
@@ -304,7 +313,7 @@ def add_profitability(panel: pd.DataFrame) -> pd.DataFrame:
     """
     gross_profit = panel["gp"].where(panel["cor"] != 0)
     assets = panel["assets"].where(panel["assets"] > 0)
-    return panel.assign(gp_a=gross_profit / assets)
+    return _with(panel, gp_a=gross_profit / assets)
 
 
 ASSET_GROWTH_MONTHS = 12
@@ -338,7 +347,7 @@ def add_asset_growth(panel: pd.DataFrame) -> pd.DataFrame:
 
     now = panel["assets"].where(panel["assets"] > 0).to_numpy()
     before = matched["assets_year_ago"].where(matched["assets_year_ago"] > 0).to_numpy()
-    return panel.assign(asset_growth=now / before - 1)
+    return _with(panel, asset_growth=now / before - 1)
 
 
 # Volatility over months t-2 .. t, from daily returns; fewer days than this -> NaN.
@@ -377,7 +386,7 @@ def add_volatility(panel: pd.DataFrame) -> pd.DataFrame:
     n, total, total_sq = pooled["n_days"], pooled["dret_sum"], pooled["dret_sumsq"]
     enough = n >= VOLATILITY_MIN_DAYS
     variance = (total_sq - total**2 / n.where(enough)) / (n.where(enough) - 1)
-    return panel.assign(vol_3m=np.sqrt(variance.clip(lower=0)).to_numpy())
+    return _with(panel, vol_3m=np.sqrt(variance.clip(lower=0)).to_numpy())
 
 
 def add_reversal(panel: pd.DataFrame) -> pd.DataFrame:
@@ -389,7 +398,7 @@ def add_reversal(panel: pd.DataFrame) -> pd.DataFrame:
     closes, which the $5 investable cut dampens. The row's own `ret`, known at
     month_end: no look-ahead. NaN where `ret` is (e.g. after a gap).
     """
-    return panel.assign(rev_1m=panel["ret"])
+    return _with(panel, rev_1m=panel["ret"])
 
 
 def add_size(panel: pd.DataFrame) -> pd.DataFrame:
@@ -400,7 +409,7 @@ def add_size(panel: pd.DataFrame) -> pd.DataFrame:
     Uses only the row's own `market_cap`, known at month_end. NaN if it is missing.
     """
     market_cap = panel["market_cap"].where(panel["market_cap"] > 0)
-    return panel.assign(log_mcap=np.log(market_cap))
+    return _with(panel, log_mcap=np.log(market_cap))
 
 
 def add_value(panel: pd.DataFrame) -> pd.DataFrame:
@@ -415,7 +424,7 @@ def add_value(panel: pd.DataFrame) -> pd.DataFrame:
     """
     book = panel["equityusd"].where(panel["equityusd"] > 0)
     market = panel["market_cap"].where(panel["market_cap"] > 0)
-    return panel.assign(bm=book / market)
+    return _with(panel, bm=book / market)
 
 
 def _usd(panel: pd.DataFrame, column: str) -> pd.Series:
@@ -452,7 +461,8 @@ def add_valuation_ratios(panel: pd.DataFrame) -> pd.DataFrame:
     earnings = _usd(panel, "netinc")
     ebitda = _usd(panel, "ebitda")
     ent_mult = (mcap + _usd(panel, "debt") - cash) / ebitda.where(ebitda != 0)
-    return panel.assign(
+    return _with(
+        panel,
         am=assets / mcap,
         sp=_usd(panel, "revenue") / mcap,
         leverage=_usd(panel, "liabilities") / mcap,
@@ -538,13 +548,95 @@ def add_book_payout_debt_ratios(panel: pd.DataFrame) -> pd.DataFrame:
     net_debt = ((debt - cash) / mcap).where(~financial & complete & (log_bm > cut))
 
     ebm = (book + cash - debt) / (mcap + cash - debt)
-    return panel.assign(
+    return _with(
+        panel,
         bm_dec=book / dec_cap,
         payout_yield=payout,
         net_payout_yield=net_payout,
         net_debt_price=net_debt,
         ebm=ebm,
         bpebm=book / mcap - ebm,
+    )
+
+
+def _months_ago(panel: pd.DataFrame, column: str, months: int) -> pd.Series:
+    """`column` on the same stock's row `months` calendar months earlier (NaN if none):
+    what was public then. `panel` must be sorted by stock (`_sorted_by_stock`)."""
+    grid = _calendar_grid(panel, column)
+    return pd.Series(_at_rows(grid.shift(months), panel, grid), index=panel.index)
+
+
+TAX_RATE = 0.35  # Tax: OSAP's top statutory rate from 1993 (kept after 2018's cut to 21%)
+OPERPROF_SMALL = 1 / 3  # OperProf: drop the month's smallest third by market cap
+TANG_SIC = (2000, 3999)  # tang: manufacturers only
+# tang: expected liquidation value per dollar of each asset (Berger, Ofek & Swary 1996).
+TANG_WEIGHTS = {"cashneq": 1.0, "receivables": 0.715, "inventory": 0.547, "ppnenet": 0.535}
+
+
+def add_profitability_ratios(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `roe`, `oper_prof`, `oper_prof_rd`, `cb_oper_prof`, `op_leverage`, `tax`, `tang`.
+
+    OSAP's code on the latest public filing (flows trailing twelve months). Ratios
+    within one filing, so the currency cancels. Compustat's SG&A includes R&D;
+    Sharadar's `sgna` does not (checked: opex = sgna + rnd), so OSAP's `xsga` is
+    `sgna + rnd` here. Missing R&D counts as 0, as in OSAP.
+    - `roe`: net income / book equity (RoE; Haugen & Baker 1996).
+    - `oper_prof`: (revenue - cost of revenue - SG&A incl. R&D - interest) / book
+      equity; the month's smallest third by market cap excluded (OperProf; Fama &
+      French 2006).
+    - `oper_prof_rd`: (revenue - cost of revenue - SG&A excl. R&D) / assets, i.e.
+      R&D added back; financials excluded (OperProfRD; Ball et al. 2016).
+    - `cb_oper_prof`: the same profit minus the 12-month increases in receivables
+      and inventory, plus those in deferred revenue and payables, / assets;
+      financials excluded (CBOperProf; Ball et al. 2016). Sharadar has no prepaid
+      or accrued-expense fields: those terms are left out.
+    - `op_leverage`: (cost of revenue + SG&A incl. R&D) / assets (OPLeverage; Novy-Marx 2011).
+    - `tax`: tax expense / `TAX_RATE` / net income, 1 for loss-makers that pay tax
+      (Tax; Lev & Nissim 2004). Sharadar gives total tax only, not current vs deferred.
+    - `tang`: liquidation-weighted assets (`TANG_WEIGHTS`) / assets, manufacturers
+      only (tang; Hahn & Lee 2009). Net PP&E, where OSAP uses gross.
+    Financials and manufacturers by today's SIC code (see data.real.add_sic_code).
+    12-month changes use the stock's own row 12 calendar months earlier: no look-ahead.
+    """
+    panel = _sorted_by_stock(panel)
+    assets = panel["assets"].where(panel["assets"] > 0)
+    equity, income = panel["equity"], panel["netinc"]
+    rnd = panel["rnd"].fillna(0)
+    gross = panel["revenue"] - panel["cor"]
+    financial = _financial(panel)
+
+    cap_rank = panel.groupby("month_end")["market_cap"].rank(pct=True)
+    oper_prof = (gross - panel["sgna"] - rnd - panel["intexp"]) / equity.where(equity != 0)
+
+    def increase(column: str) -> pd.Series:
+        return panel[column] - _months_ago(panel, column, 12)
+
+    cash_profit = gross - panel["sgna"]
+    cash_profit = (
+        cash_profit
+        - increase("receivables")
+        - increase("inventory")
+        + increase("deferredrev")
+        + increase("payables")
+    )
+
+    tax_paid = panel["taxexp"]
+    tax = tax_paid / TAX_RATE / income.where(income != 0)
+    loss = income <= 0
+    tax = tax.mask(loss & ((tax_paid > 0) | tax_paid.isna()), 1.0)
+    tax = tax.mask((income == 0) & (tax_paid != 0), 1.0)
+
+    weighted = sum(w * panel[c] for c, w in TANG_WEIGHTS.items())
+    manufacturer = panel["sic_code"].between(*TANG_SIC)
+    return _with(
+        panel,
+        roe=income / equity.where(equity != 0),
+        oper_prof=oper_prof.where(cap_rank > OPERPROF_SMALL),
+        oper_prof_rd=((gross - panel["sgna"]) / assets).where(~financial),
+        cb_oper_prof=(cash_profit / assets).where(~financial),
+        op_leverage=(panel["cor"] + panel["sgna"].fillna(0) + rnd) / assets,
+        tax=tax,
+        tang=(weighted / assets).where(manufacturer),
     )
 
 
@@ -566,6 +658,4 @@ def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank
         count = by_month[col].transform("count")
         spread = (2 * (rank - 1) / (count - 1) - 1).where(count > 1)
         added[f"{col}{suffix}"] = spread.fillna(0.0)
-    # One concat, not one insert per column (which fragments the frame).
-    kept = panel.drop(columns=[c for c in added if c in panel.columns])
-    return pd.concat([kept, pd.DataFrame(added, index=panel.index)], axis=1)
+    return _with(panel, **added)
