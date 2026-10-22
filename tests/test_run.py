@@ -5,11 +5,15 @@ import pytest
 from alpha_survival.models import HistoricalMean
 from alpha_survival.run import (
     COST_BPS,
+    LEARNED,
     PUBLISHED_SIGN,
     RAW_FEATURES,
     UNREPORTED_TRIALS,
     baseline_models,
+    coefficient_table,
+    earlier_signal_candidates,
     evaluate,
+    monthly_sharpes,
     penalty_table,
     portfolio_table,
     prepare,
@@ -17,9 +21,11 @@ from alpha_survival.run import (
     render_portfolios,
     render_report,
     render_selection,
+    render_signals,
     render_spreads,
     run_all,
     selection_table,
+    signal_table,
     spread_table,
 )
 
@@ -45,6 +51,16 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["dret_sumsq"] = 21 * rng.uniform(0.0001, 0.002, len(panel))
     panel["ar_n"] = 20
     panel["ar_sum"] = 20 * rng.uniform(0, 1e-4, len(panel))
+    # Daily summaries for the price and trading signals (data.real.DAILY_SUMMARY_COLUMNS).
+    panel["n_trade_days"] = 21
+    panel["dret_sumcube"] = rng.normal(0, 1e-4, len(panel))
+    panel["dret_max"] = rng.uniform(0, 0.1, len(panel))
+    panel["close_split_adj"] = rng.uniform(5, 100, len(panel))
+    panel["close_max"] = panel["close_split_adj"] * rng.uniform(1, 1.2, len(panel))
+    panel["illiq_n"] = 21
+    panel["illiq_sum"] = 21 * rng.uniform(0, 1e-8, len(panel))
+    panel["share_volume"] = rng.uniform(1e5, 1e7, len(panel))
+    panel["dollar_volume"] = panel["share_volume"] * panel["close_split_adj"]
     panel["investable"] = True
     return panel
 
@@ -67,13 +83,7 @@ def test_evaluate_scores_each_model_the_right_way():
     assert list(table.index) == [
         "zero",
         "hist_mean",
-        "signal_mom_12_1",
-        "signal_log_mcap",
-        "signal_bm",
-        "signal_rev_1m",
-        "signal_gp_a",
-        "signal_asset_growth",
-        "signal_vol_3m",
+        *(f"signal_{c}" for c in RAW_FEATURES),
         "ols",
         "ridge",
         "enet",
@@ -86,7 +96,15 @@ def test_evaluate_scores_each_model_the_right_way():
     assert table.loc[["zero", "hist_mean"], "mean_ic"].isna().all()
     signals = [f"signal_{c}" for c in RAW_FEATURES]
     assert table.loc[signals, "oos_r2_pct"].isna().all()
-    assert table.loc[signals, "ic_months"].gt(0).all()
+    # Signals whose lags reach past the 40-month toy panel are blank, not an error.
+    long_lags = ["mom_season_6y", "mom_season_11y", "mom_season_16y", "mom_offseason_6y"]
+    long_lags += ["mom_offseason_11y", "mom_offseason_16y"]
+    empty = table.loc[signals, "n_forecasts"] == 0
+    assert set(empty[empty].index) <= {f"signal_{c}" for c in long_lags}
+    assert table.loc[empty[empty].index, "mean_ic"].isna().all()
+    # mom_rev is set only for extreme stocks: too few per month for an IC here.
+    scored = empty[~empty].index.drop("signal_mom_rev")
+    assert table.loc[scored, "ic_months"].gt(0).all()
     # Learned models forecast returns AND order stocks: both metrics.
     assert (
         table.loc[["ols", "ridge", "enet", "lgbm"], ["oos_r2_pct", "mean_ic"]].notna().all().all()
@@ -100,7 +118,30 @@ def test_report_labels_the_results_honestly():
     lowered = text.lower()
     assert "real data" in lowered and "out-of-sample" in lowered
     assert "no transaction costs" in lowered
-    assert "| signal_mom_12_1 |" in text
+    # Models in the main table; single signals only in the appendix.
+    assert "| ols |" in text and "signal_mom_12_1" not in text
+
+
+def test_signal_appendix_lists_every_feature_with_its_published_sign():
+    panel = prepare(make_panel())
+    table = signal_table(evaluate(panel, baseline_models(), min_train=12))
+    assert list(table["feature"]) == RAW_FEATURES
+    assert (table["published_sign"] == table["feature"].map(PUBLISHED_SIGN)).all()
+    assert table.set_index("feature").loc["mom_6m", "osap"] == "Mom6m"
+    assert table.set_index("feature").loc["vol_3m", "osap"] == ""  # not an OSAP signal
+    agrees = np.sign(table["mean_ic"]) == table["published_sign"]
+    assert ((table["sign_agrees"] == "yes") == agrees).all()
+    text = render_signals(table)
+    assert "Appendix" in text and "no portfolios" in text and "| Mom6m |" in text
+
+
+def test_published_signs_come_from_the_catalogue_and_match_the_papers():
+    assert set(PUBLISHED_SIGN) == set(RAW_FEATURES)
+    # The original 7, as hand-coded before the catalogue (Steps 10-26).
+    original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
+    original |= {"asset_growth": -1, "vol_3m": -1}
+    assert {f: PUBLISHED_SIGN[f] for f in original} == original
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 28
 
 
 def test_prepare_ranks_among_investable_stocks_only():
@@ -135,15 +176,12 @@ def test_rolling_window_forgets_old_months():
     assert roll.loc[0, "oos_r2_pct"] > exp.loc[0, "oos_r2_pct"]
 
 
-def test_portfolio_table_covers_ols_and_every_signal_both_weightings():
+def test_portfolio_table_trades_only_the_models_both_weightings():
     panel = prepare(make_panel())
     forecasts = {}
     run_all(panel, keep=forecasts, min_train=12)
     table = portfolio_table(forecasts, panel)
-    assert set(PUBLISHED_SIGN) == set(RAW_FEATURES)  # every feature has a published sign
-    assert set(table["portfolio"]) == {"ols", "enet", "lgbm", "combo"} | {
-        f"signal_{c}" for c in RAW_FEATURES
-    }
+    assert set(table["portfolio"]) == set(LEARNED) == {"ols", "enet", "lgbm", "combo"}
     assert (table.groupby("portfolio")["weighting"].apply(set) == {"equal", "value"}).all()
     combos = table.groupby(["portfolio", "weighting"])["legs"].apply(set)
     assert (combos == {"decile", "band"}).all()
@@ -166,47 +204,64 @@ def test_spread_table_has_one_column_per_size_decile():
     assert "Abdi & Ranaldo" in render_spreads(table)
 
 
-def test_signal_portfolios_trade_the_published_direction():
-    # A signal published as "low is good" must short its high values: flipping the
-    # forecast's sign must flip the long-short return exactly.
-    panel = prepare(make_panel())
-    forecasts = {}
-    run_all(panel, keep=forecasts, min_train=12)
-    vol = forecasts["signal_vol_3m"]
-    table = portfolio_table({"signal_vol_3m": vol}, panel)
-    table = table[table["legs"] == "decile"].set_index("weighting")
-    flipped = portfolio_table({"signal_vol_3m": vol.assign(pred=-vol["pred"])}, panel)
-    flipped = flipped[flipped["legs"] == "decile"].set_index("weighting")
-    assert table.loc["equal", "direction"] == "low"
-    assert table.loc["equal", "ann_return"] == pytest.approx(-flipped.loc["equal", "ann_return"])
-
-
 def test_selection_table_deflates_every_portfolio_by_the_honest_trial_count():
     panel = prepare(make_panel())
     forecasts, net = {}, {}
     run_all(panel, keep=forecasts, min_train=12)
     portfolio_table(forecasts, panel, keep_net=net)
-    assert len(net) == 44  # 11 portfolios x 2 weightings x 2 leg rules
+    assert len(net) == 16  # 4 models x 2 weightings x 2 leg rules
+    assert UNREPORTED_TRIALS == 52  # earlier portfolios stay trials
     table = selection_table(net)
-    honest = f"dsr_n{44 + UNREPORTED_TRIALS}"
+    honest = f"dsr_n{16 + UNREPORTED_TRIALS}"
     assert list(table.columns) == [
         "portfolio",
         "weighting",
         "legs",
         "sharpe_net_est",
         "psr",
-        "dsr_n10",
+        "dsr_n20",
         honest,
-        "dsr_n50",
+        "dsr_n100",
     ]
     assert table["sharpe_net_est"].is_monotonic_decreasing  # best first
     # Same Sharpe as the NET table, and more trials only ever make the test harder.
     best = table.iloc[0]
-    assert best["psr"] > best["dsr_n10"] > best[honest] > best["dsr_n50"]
-    probs = table[["psr", "dsr_n10", honest, "dsr_n50"]]
+    assert best["psr"] > best["dsr_n20"] > best[honest] > best["dsr_n100"]
+    probs = table[["psr", "dsr_n20", honest, "dsr_n100"]]
     assert ((probs >= 0) & (probs <= 1)).all().all()
     report = render_selection(table, net)
-    assert "deflated Sharpe" in report and f"Trials: {44 + UNREPORTED_TRIALS}" in report
+    assert "deflated Sharpe" in report and f"Trials: {16 + UNREPORTED_TRIALS}" in report
+    assert "single-signal portfolios" in report
+
+
+def test_signal_portfolios_trade_the_published_direction():
+    # A signal published as "low is good" must short its high values: flipping the
+    # sign must flip the long-short return exactly.
+    panel = prepare(make_panel())
+    forecasts = {}
+    run_all(panel, keep=forecasts, min_train=12)
+    low = portfolio_table(forecasts, panel, candidates=[("signal_vol_3m", -1)])
+    high = portfolio_table(forecasts, panel, candidates=[("signal_vol_3m", 1)])
+    low, high = (t[t["legs"] == "decile"].set_index("weighting") for t in (low, high))
+    assert low.loc["equal", "ann_return"] == pytest.approx(-high.loc["equal", "ann_return"])
+    assert ("signal_vol_3m", -1) in earlier_signal_candidates()
+    assert len(earlier_signal_candidates()) == 7
+
+
+def test_hidden_trials_widen_the_spread_but_not_the_rows():
+    panel = prepare(make_panel())
+    forecasts, net, hidden = {}, {}, {}
+    run_all(panel, keep=forecasts, min_train=12)
+    portfolio_table(forecasts, panel, keep_net=net)
+    portfolio_table(forecasts, panel, keep_net=hidden, candidates=earlier_signal_candidates())
+    assert len(hidden) == 28  # 7 signals x 2 weightings x 2 leg rules
+    shown, variance = monthly_sharpes(net, hidden)
+    assert set(shown) == set(net)
+    every = [r.mean() / r.std(ddof=0) for r in [*net.values(), *hidden.values()]]
+    assert variance == pytest.approx(np.var(every, ddof=1))
+    table = selection_table(net, hidden)
+    assert len(table) == len(net)  # hidden trials are not reported as rows
+    assert "28 earlier" in render_selection(table, net, hidden)
 
 
 def test_selection_table_sharpe_matches_the_net_table():
@@ -230,13 +285,18 @@ def test_penalty_table_reports_each_enet_fold():
     table = penalty_table(folds, oos)
     assert len(table) == oos["fold"].nunique() == len(folds)
     assert table["test_from"].iloc[0] == MONTHS[12].date()
-    assert list(table.columns[4:]) == RAW_FEATURES
     for row, model in zip(table.itertuples(), folds, strict=True):
         assert row.alpha == model.alpha_
         assert row.n_kept == (model.estimator_.coef_ != 0).sum()
-        assert getattr(row, RAW_FEATURES[0]) == 1e4 * model.estimator_.coef_[0]
-    text = render_penalties(table)
-    assert "real data" in text.lower() and "| alpha |" in text
+    coefs = coefficient_table(folds).set_index("feature")
+    assert set(coefs.index) == set(RAW_FEATURES)
+    first = RAW_FEATURES[0]
+    by_fold = [1e4 * m.estimator_.coef_[0] for m in folds]
+    assert coefs.loc[first, "mean_coef_bps"] == pytest.approx(np.mean(by_fold))
+    assert coefs.loc[first, "folds_kept"] == sum(c != 0 for c in by_fold)
+    assert coefs["folds_kept"].is_monotonic_decreasing
+    text = render_penalties(table, coefficient_table(folds))
+    assert "real data" in text.lower() and "| alpha |" in text and "| folds_kept |" in text
     assert f"of {len(table)} refits kept no feature" in text
 
 

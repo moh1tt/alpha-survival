@@ -6,6 +6,7 @@ import pytest
 from alpha_survival.catalogue import (
     EXISTING_FEATURES,
     EXTERNAL_SOURCES,
+    FEATURE_ACRONYMS,
     SHARADAR_TABLES,
     STATUSES,
     USABLE,
@@ -47,6 +48,13 @@ def test_existing_rows_are_our_features_with_our_published_signs(cat):
     for acronym, feature in EXISTING_FEATURES.items():
         assert feature in RAW_FEATURES
         assert existing.loc[acronym, "sign"] == PUBLISHED_SIGN[feature]
+
+
+def test_every_built_feature_replicates_a_usable_catalogue_signal(cat):
+    status = cat.set_index("acronym")["status"]
+    assert set(FEATURE_ACRONYMS.values()) <= set(status.index)
+    assert status[list(FEATURE_ACRONYMS.values())].isin(["existing", *USABLE]).all()
+    assert len(set(FEATURE_ACRONYMS.values())) == len(FEATURE_ACRONYMS)  # one each
 
 
 def test_inputs_name_only_known_tables_and_sources(cat):

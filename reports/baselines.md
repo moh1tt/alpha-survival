@@ -3,123 +3,121 @@
 **Real data (Sharadar US equities), out-of-sample, walk-forward. No transaction costs; not a trading result.**
 
 - Panel: investable rows (price >= $5 at month end), 1997-12 to 2026-09, 1,362,457 stock-months, 16,118 stocks.
-- Models: `zero` and `hist_mean` (pooled training mean) baselines; raw signals `mom_12_1` (12-1 momentum), `log_mcap` (log size) and `bm` (book-to-market: latest filed USD book equity / month-end market cap, NaN if book <= 0) and `rev_1m` (this month's return, short-term reversal; expect a NEGATIVE IC) and `gp_a` (gross profit / total assets, NaN where cost of revenue is 0) and `asset_growth` (assets vs. 12 months earlier; expect a NEGATIVE IC) and `vol_3m` (std of daily returns over the last 3 months; expect a NEGATIVE IC); `ols` and `ridge` (alpha=1, untuned) on all seven rank-normalised to [-1, 1] each month; `enet` (ElasticNet, half Lasso half Ridge penalty, its strength picked from 1e-5 to 0.1 by MSE on the latest 20% of each training window, then refit on the whole window) on the same seven; `lgbm` (LightGBM gradient-boosted trees, fixed untuned settings: depth 4, 200 trees, learning rate 0.05, each leaf >= 0.1% of training rows) on the same seven, so it can pick up nonlinear effects and interactions.
+- Features: 28 signals, each rank-normalised to [-1, 1] every month (missing = 0, the middle): the original 7 plus Open Source Asset Pricing replications (Chen & Zimmermann 2022). List and single-signal scores in the appendix at the end.
+- Models: `zero` and `hist_mean` (pooled training mean) baselines; `ols` and `ridge` (alpha=1, untuned) on all features; `enet` (ElasticNet, half Lasso half Ridge penalty, its strength picked from 1e-5 to 0.1 by MSE on the latest 20% of each training window, then refit on the whole window); `lgbm` (LightGBM gradient-boosted trees, fixed untuned settings: depth 4, 200 trees, learning rate 0.05, each leaf >= 0.1% of training rows), which can pick up nonlinear effects and interactions.
 - `combo`: each month, the forecasts of `ols`, `enet` and `lgbm` ranked to [-1, 1] and averaged with equal weights (fixed in advance, nothing fit). A rank score, not a return, so no R^2.
 - Splits: first 60 months train only, 12-month test blocks, model refit at the start of each block, horizon 1, embargo 0. `window`: `expanding` trains on all months so far; `rolling 60m` on the latest 60 only. Both start testing in the same month.
-- `oos_r2_pct`: pooled R^2 vs. a zero forecast, in percent (Gu, Kelly & Xiu 2020). Blank for raw signals, whose scale is not a return.
-- `mean_ic`: average monthly Spearman rank correlation of forecast with next-month return; months with < 10 stocks skipped. Blank for constant forecasts. `signal_log_mcap` is log size, so a small-firm premium shows as a NEGATIVE IC.
+- `oos_r2_pct`: pooled R^2 vs. a zero forecast, in percent (Gu, Kelly & Xiu 2020).
+- `mean_ic`: average monthly Spearman rank correlation of forecast with next-month return; months with < 10 stocks skipped. Blank for constant forecasts.
 - `ic_t_stat` treats months as independent; `ic_nw_t_stat` corrects for autocorrelated ICs (Newey & West 1987; lags floor(4 (n/100)^(2/9)), 5 for 285 months) and is the one to trust. `ic_autocorr_1`: correlation of each month's IC with the previous month's.
 
 | model | window | first_test_month | last_test_month | n_forecasts | oos_r2_pct | mean_ic | ic_t_stat | ic_nw_t_stat | ic_autocorr_1 | ic_hit_rate | ic_months |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | zero | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.000 |  |  |  |  |  | 0 |
 | hist_mean | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.193 |  |  |  |  |  | 0 |
-| signal_mom_12_1 | expanding | 2002-12-31 | 2026-09-30 | 980,658 |  | 0.0131 | 1.82 | 1.87 | -0.01 | 0.579 | 285 |
-| signal_log_mcap | expanding | 2002-12-31 | 2026-09-30 | 1,009,626 |  | 0.0334 | 5.76 | 6.73 | -0.17 | 0.635 | 285 |
-| signal_bm | expanding | 2002-12-31 | 2026-09-30 | 956,039 |  | 0.0081 | 1.25 | 1.10 | 0.10 | 0.505 | 285 |
-| signal_rev_1m | expanding | 2002-12-31 | 2026-09-30 | 1,050,412 |  | -0.0205 | -3.23 | -3.72 | -0.12 | 0.418 | 285 |
-| signal_gp_a | expanding | 2002-12-31 | 2026-09-30 | 756,965 |  | 0.0110 | 2.44 | 2.27 | 0.13 | 0.582 | 285 |
-| signal_asset_growth | expanding | 2002-12-31 | 2026-09-30 | 944,218 |  | 0.0020 | 0.56 | 0.46 | 0.15 | 0.512 | 285 |
-| signal_vol_3m | expanding | 2002-12-31 | 2026-09-30 | 1,044,254 |  | -0.0439 | -4.44 | -4.84 | -0.04 | 0.386 | 285 |
-| ols | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.128 | 0.0314 | 5.33 | 5.21 | 0.04 | 0.681 | 285 |
-| ridge | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.128 | 0.0314 | 5.33 | 5.21 | 0.04 | 0.681 | 285 |
-| enet | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.145 | 0.0258 | 3.04 | 3.19 | -0.01 | 0.642 | 201 |
-| lgbm | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.182 | 0.0306 | 7.03 | 7.25 | -0.04 | 0.681 | 285 |
-| combo | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 |  | 0.0333 | 6.07 | 5.67 | 0.06 | 0.695 | 285 |
+| ols | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.076 | 0.0301 | 5.05 | 5.34 | -0.05 | 0.667 | 285 |
+| ridge | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.076 | 0.0301 | 5.05 | 5.34 | -0.05 | 0.667 | 285 |
+| enet | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.148 | 0.0212 | 2.37 | 2.55 | -0.04 | 0.602 | 201 |
+| lgbm | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.398 | 0.0320 | 7.94 | 7.50 | 0.02 | 0.709 | 285 |
+| combo | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 |  | 0.0333 | 6.19 | 5.91 | 0.03 | 0.733 | 285 |
 | hist_mean | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.192 |  |  |  |  |  | 0 |
-| ols | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.325 | 0.0248 | 3.96 | 4.13 | 0.01 | 0.600 | 285 |
+| ols | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.385 | 0.0239 | 4.66 | 5.13 | -0.02 | 0.625 | 285 |
 
 ## ElasticNet: what it chose each year
 
 **Real data. Chosen in training only (latest 20% of each training window); the test year is never seen.**
 
-- One row per refit. `alpha`: penalty strength picked (1e-5 barely shrinks, 0.1 zeroes everything). `n_kept`: features with a non-zero coefficient.
-- Feature columns: coefficient in bps per month, from the median stock to the top one on that feature (ranks -1 to +1), others held fixed. `0` = dropped.
+- One row per refit. `alpha`: penalty strength picked (1e-5 barely shrinks, 0.1 zeroes everything). `n_kept`: features (of 28) with a non-zero coefficient.
 - 7 of 24 refits kept no feature: in validation, nothing linear beat forecasting the average, so the model held no position that year.
 
-| test_from | test_to | alpha | n_kept | mom_12_1 | log_mcap | bm | rev_1m | gp_a | asset_growth | vol_3m |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2002-12-31 | 2003-11-30 | 1e-05 | 7 | +161.2 | +2.4 | +71.0 | -26.0 | +141.1 | -57.8 | -51.0 |
-| 2003-12-31 | 2004-11-30 | 1e-02 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 2004-12-31 | 2005-11-30 | 1e-02 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 2005-12-31 | 2006-11-30 | 3e-03 | 2 | +41.6 | 0 | 0 | 0 | +9.2 | 0 | 0 |
-| 2006-12-31 | 2007-11-30 | 1e-02 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 2007-12-31 | 2008-11-30 | 3e-03 | 1 | +35.8 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 2008-12-31 | 2009-11-30 | 1e-03 | 5 | +79.2 | 0 | +24.4 | 0 | +53.8 | -13.0 | -28.0 |
-| 2009-12-31 | 2010-11-30 | 1e-02 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 2010-12-31 | 2011-11-30 | 1e-02 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 2011-12-31 | 2012-11-30 | 1e-02 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 2012-12-31 | 2013-11-30 | 1e-03 | 6 | +48.8 | 0 | +16.9 | -6.6 | +40.8 | -14.1 | -19.4 |
-| 2013-12-31 | 2014-11-30 | 1e-03 | 6 | +48.2 | 0 | +15.3 | -5.3 | +40.6 | -13.2 | -15.4 |
-| 2014-12-31 | 2015-11-30 | 1e-03 | 6 | +44.1 | 0 | +12.5 | -4.8 | +39.2 | -11.4 | -18.4 |
-| 2015-12-31 | 2016-11-30 | 1e-03 | 6 | +46.7 | 0 | +11.6 | -6.2 | +38.7 | -7.6 | -22.4 |
-| 2016-12-31 | 2017-11-30 | 1e-03 | 6 | +42.0 | 0 | +17.3 | -6.8 | +36.7 | -7.7 | -19.5 |
-| 2017-12-31 | 2018-11-30 | 1e-03 | 6 | +39.1 | 0 | +13.6 | -7.2 | +35.7 | -5.9 | -18.8 |
-| 2018-12-31 | 2019-11-30 | 3e-04 | 6 | +54.0 | 0 | +28.0 | -16.2 | +58.3 | -16.4 | -30.7 |
-| 2019-12-31 | 2020-11-30 | 1e-03 | 6 | +35.2 | 0 | +8.4 | -10.1 | +34.2 | -3.7 | -19.0 |
-| 2020-12-31 | 2021-11-30 | 3e-03 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 2021-12-31 | 2022-11-30 | 3e-04 | 7 | +49.7 | +0.2 | +28.1 | -19.7 | +57.8 | -14.9 | -26.0 |
-| 2022-12-31 | 2023-11-30 | 1e-05 | 7 | +59.5 | +8.0 | +42.8 | -24.0 | +67.8 | -20.5 | -34.3 |
-| 2023-12-31 | 2024-11-30 | 3e-04 | 7 | +46.3 | +7.3 | +33.9 | -19.5 | +56.9 | -12.0 | -22.8 |
-| 2024-12-31 | 2025-11-30 | 1e-05 | 7 | +56.4 | +18.8 | +46.8 | -22.8 | +68.0 | -14.0 | -24.0 |
-| 2025-12-31 | 2026-09-30 | 1e-05 | 7 | +55.5 | +20.6 | +47.5 | -19.7 | +66.4 | -13.4 | -19.7 |
+| test_from | test_to | alpha | n_kept |
+| --- | --- | --- | --- |
+| 2002-12-31 | 2003-11-30 | 3e-03 | 7 |
+| 2003-12-31 | 2004-11-30 | 1e-02 | 0 |
+| 2004-12-31 | 2005-11-30 | 3e-03 | 5 |
+| 2005-12-31 | 2006-11-30 | 1e-02 | 0 |
+| 2006-12-31 | 2007-11-30 | 1e-02 | 0 |
+| 2007-12-31 | 2008-11-30 | 3e-03 | 5 |
+| 2008-12-31 | 2009-11-30 | 1e-03 | 9 |
+| 2009-12-31 | 2010-11-30 | 1e-02 | 0 |
+| 2010-12-31 | 2011-11-30 | 1e-02 | 0 |
+| 2011-12-31 | 2012-11-30 | 1e-02 | 0 |
+| 2012-12-31 | 2013-11-30 | 1e-02 | 0 |
+| 2013-12-31 | 2014-11-30 | 1e-03 | 9 |
+| 2014-12-31 | 2015-11-30 | 3e-04 | 17 |
+| 2015-12-31 | 2016-11-30 | 3e-04 | 17 |
+| 2016-12-31 | 2017-11-30 | 3e-04 | 18 |
+| 2017-12-31 | 2018-11-30 | 3e-04 | 17 |
+| 2018-12-31 | 2019-11-30 | 3e-04 | 17 |
+| 2019-12-31 | 2020-11-30 | 1e-03 | 10 |
+| 2020-12-31 | 2021-11-30 | 3e-03 | 1 |
+| 2021-12-31 | 2022-11-30 | 1e-04 | 23 |
+| 2022-12-31 | 2023-11-30 | 3e-04 | 18 |
+| 2023-12-31 | 2024-11-30 | 1e-03 | 9 |
+| 2024-12-31 | 2025-11-30 | 1e-03 | 9 |
+| 2025-12-31 | 2026-09-30 | 1e-03 | 7 |
+
+Per feature, over all refits: `folds_kept` = refits with a non-zero coefficient; `mean_coef_bps` = average coefficient in bps per month from the median stock to the top one on that feature (dropped = 0), others held fixed.
+
+| feature | published_sign | folds_kept | mean_coef_bps |
+| --- | --- | --- | --- |
+| mom_offseason_12m | +1 | 17 | +19.1 |
+| mom_6m | +1 | 16 | +11.4 |
+| gp_a | +1 | 15 | +30.3 |
+| mom_offseason | -1 | 15 | -14.2 |
+| max_ret | -1 | 14 | -13.5 |
+| bm | +1 | 13 | +13.1 |
+| vol_sd | -1 | 11 | +16.7 |
+| high_52 | +1 | 11 | +7.6 |
+| rev_1m | -1 | 11 | -6.8 |
+| mom_12_1 | +1 | 11 | +4.2 |
+| vol_3m | -1 | 10 | -4.2 |
+| mom_season | +1 | 8 | +4.1 |
+| asset_growth | -1 | 8 | -3.3 |
+| illiquidity | +1 | 7 | +11.8 |
+| mom_season_6y | +1 | 7 | +3.1 |
+| mom_season_short | +1 | 7 | +2.9 |
+| mom_offseason_6y | -1 | 7 | -1.6 |
+| mr_reversal | -1 | 3 | -0.2 |
+| int_mom | +1 | 2 | -0.6 |
+| lr_reversal | -1 | 1 | +0.5 |
+| log_mcap | -1 | 1 | +0.3 |
+| mom_season_11y | +1 | 1 | +0.3 |
+| return_skew | -1 | 1 | +0.2 |
+| dol_vol | -1 | 1 | +0.1 |
+| mom_rev | +1 | 0 | 0 |
+| mom_season_16y | +1 | 0 | 0 |
+| mom_offseason_11y | -1 | 0 | 0 |
+| mom_offseason_16y | -1 | 0 | 0 |
 
 ## Decile long-short portfolios (GROSS of costs)
 
 **Real data, out-of-sample. No trading or borrowing costs yet: an upper bound, not achievable returns.**
 
 - Each month: long the top 10% of stocks by forecast, short the bottom 10%, hold one month. Return = long leg - short leg (the short funds the long).
-- `direction`: signals trade the sign their original paper published (`high` = buy high values), never the sign seen in our test period; `ols`, `enet`, `lgbm` and `combo` use the signs they learned in each training window.
+- Only the models are traded; each uses the directions it learned in its training window. Single signals are scored in the appendix (IC only).
 - `equal`: every stock the same weight; `value`: weighted by market cap at formation. A big gap means the edge lives in small, costly-to-trade stocks.
 - `legs`: `decile` re-forms both legs from scratch each month; `band` buys into the top (bottom) 10% but only sells once a stock leaves the top (bottom) 20%, so names near the cut-off stop flipping in and out (buy/hold spread, Novy-Marx & Velikov 2016). Band fixed in advance, not tuned.
 - `ann_return` = 12 x mean monthly; `sharpe` = mean / std x sqrt(12); `nw_t_stat` of the mean monthly return; `max_drawdown` of $1 compounded.
 
-| portfolio | direction | weighting | legs | ann_return | ann_vol | sharpe | nw_t_stat | max_drawdown | hit_rate | n_months | avg_stocks_per_leg |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ols | learned | equal | decile | 0.1049 | 0.1484 | 0.71 | 3.11 | -0.448 | 0.642 | 285 | 369 |
-| ols | learned | equal | band | 0.0853 | 0.1361 | 0.63 | 2.73 | -0.423 | 0.635 | 285 | 486 |
-| ols | learned | value | decile | 0.0488 | 0.1785 | 0.27 | 1.16 | -0.481 | 0.554 | 285 | 364 |
-| ols | learned | value | band | 0.0388 | 0.1616 | 0.24 | 1.04 | -0.450 | 0.568 | 285 | 478 |
-| enet | learned | equal | decile | 0.0418 | 0.1530 | 0.27 | 1.28 | -0.535 | 0.418 | 285 | 255 |
-| enet | learned | equal | band | 0.0296 | 0.1398 | 0.21 | 0.99 | -0.508 | 0.418 | 285 | 331 |
-| enet | learned | value | decile | 0.0246 | 0.1928 | 0.13 | 0.60 | -0.497 | 0.389 | 285 | 251 |
-| enet | learned | value | band | 0.0192 | 0.1714 | 0.11 | 0.54 | -0.462 | 0.389 | 285 | 326 |
-| lgbm | learned | equal | decile | 0.1609 | 0.1239 | 1.30 | 5.28 | -0.279 | 0.712 | 285 | 370 |
-| lgbm | learned | equal | band | 0.1398 | 0.1143 | 1.22 | 4.79 | -0.275 | 0.698 | 285 | 466 |
-| lgbm | learned | value | decile | 0.0824 | 0.2279 | 0.36 | 1.63 | -0.597 | 0.589 | 285 | 353 |
-| lgbm | learned | value | band | 0.0871 | 0.2089 | 0.42 | 1.88 | -0.434 | 0.561 | 285 | 441 |
-| combo | learned | equal | decile | 0.1439 | 0.1524 | 0.94 | 4.07 | -0.444 | 0.670 | 285 | 370 |
-| combo | learned | equal | band | 0.1167 | 0.1399 | 0.83 | 3.55 | -0.407 | 0.653 | 285 | 478 |
-| combo | learned | value | decile | 0.0607 | 0.1948 | 0.31 | 1.42 | -0.581 | 0.568 | 285 | 363 |
-| combo | learned | value | band | 0.0584 | 0.1723 | 0.34 | 1.58 | -0.409 | 0.551 | 285 | 469 |
-| signal_mom_12_1 | high | equal | decile | 0.0744 | 0.1838 | 0.40 | 1.90 | -0.658 | 0.625 | 285 | 343 |
-| signal_mom_12_1 | high | equal | band | 0.0621 | 0.1658 | 0.37 | 1.74 | -0.615 | 0.607 | 285 | 448 |
-| signal_mom_12_1 | high | value | decile | 0.1053 | 0.2664 | 0.40 | 2.00 | -0.596 | 0.596 | 285 | 336 |
-| signal_mom_12_1 | high | value | band | 0.0700 | 0.2416 | 0.29 | 1.47 | -0.524 | 0.582 | 285 | 439 |
-| signal_log_mcap | low | equal | decile | -0.0621 | 0.1015 | -0.61 | -2.85 | -0.845 | 0.453 | 285 | 354 |
-| signal_log_mcap | low | equal | band | -0.0474 | 0.0938 | -0.51 | -2.39 | -0.772 | 0.477 | 285 | 459 |
-| signal_log_mcap | low | value | decile | -0.0502 | 0.1038 | -0.48 | -2.21 | -0.821 | 0.456 | 285 | 354 |
-| signal_log_mcap | low | value | band | -0.0353 | 0.0982 | -0.36 | -1.59 | -0.750 | 0.467 | 285 | 459 |
-| signal_bm | high | equal | decile | 0.0262 | 0.1474 | 0.18 | 0.79 | -0.572 | 0.481 | 285 | 335 |
-| signal_bm | high | equal | band | 0.0208 | 0.1280 | 0.16 | 0.69 | -0.555 | 0.477 | 285 | 464 |
-| signal_bm | high | value | decile | -0.0340 | 0.2170 | -0.16 | -0.67 | -0.914 | 0.495 | 285 | 335 |
-| signal_bm | high | value | band | -0.0166 | 0.1926 | -0.09 | -0.37 | -0.837 | 0.505 | 285 | 464 |
-| signal_rev_1m | low | equal | decile | 0.0334 | 0.1463 | 0.23 | 1.29 | -0.411 | 0.474 | 285 | 367 |
-| signal_rev_1m | low | equal | band | 0.0285 | 0.1427 | 0.20 | 1.10 | -0.417 | 0.488 | 285 | 408 |
-| signal_rev_1m | low | value | decile | -0.0367 | 0.2167 | -0.17 | -0.88 | -0.848 | 0.453 | 285 | 358 |
-| signal_rev_1m | low | value | band | -0.0328 | 0.2078 | -0.16 | -0.80 | -0.833 | 0.460 | 285 | 398 |
-| signal_gp_a | high | equal | decile | 0.0826 | 0.0995 | 0.83 | 3.89 | -0.211 | 0.586 | 285 | 265 |
-| signal_gp_a | high | equal | band | 0.0671 | 0.0865 | 0.78 | 3.43 | -0.175 | 0.565 | 285 | 363 |
-| signal_gp_a | high | value | decile | 0.0828 | 0.1242 | 0.67 | 2.73 | -0.330 | 0.589 | 285 | 265 |
-| signal_gp_a | high | value | band | 0.0692 | 0.1127 | 0.61 | 2.49 | -0.355 | 0.593 | 285 | 363 |
-| signal_asset_growth | low | equal | decile | 0.0079 | 0.0976 | 0.08 | 0.33 | -0.474 | 0.502 | 285 | 331 |
-| signal_asset_growth | low | equal | band | 0.0141 | 0.0864 | 0.16 | 0.63 | -0.403 | 0.502 | 285 | 423 |
-| signal_asset_growth | low | value | decile | -0.0093 | 0.1347 | -0.07 | -0.32 | -0.563 | 0.460 | 285 | 330 |
-| signal_asset_growth | low | value | band | -0.0005 | 0.1265 | -0.00 | -0.02 | -0.424 | 0.495 | 285 | 423 |
-| signal_vol_3m | low | equal | decile | 0.0387 | 0.2372 | 0.16 | 0.77 | -0.648 | 0.533 | 285 | 362 |
-| signal_vol_3m | low | equal | band | 0.0217 | 0.2257 | 0.10 | 0.45 | -0.668 | 0.526 | 285 | 492 |
-| signal_vol_3m | low | value | decile | 0.0123 | 0.2972 | 0.04 | 0.20 | -0.838 | 0.516 | 285 | 338 |
-| signal_vol_3m | low | value | band | -0.0016 | 0.2853 | -0.01 | -0.03 | -0.809 | 0.502 | 285 | 459 |
+| portfolio | weighting | legs | ann_return | ann_vol | sharpe | nw_t_stat | max_drawdown | hit_rate | n_months | avg_stocks_per_leg |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ols | equal | decile | 0.1263 | 0.1340 | 0.94 | 4.14 | -0.352 | 0.667 | 285 | 368 |
+| ols | equal | band | 0.0978 | 0.1271 | 0.77 | 3.29 | -0.404 | 0.653 | 285 | 477 |
+| ols | value | decile | 0.0645 | 0.1634 | 0.39 | 1.64 | -0.464 | 0.537 | 285 | 355 |
+| ols | value | band | 0.0475 | 0.1441 | 0.33 | 1.36 | -0.420 | 0.544 | 285 | 459 |
+| enet | equal | decile | 0.0458 | 0.1512 | 0.30 | 1.49 | -0.466 | 0.432 | 285 | 258 |
+| enet | equal | band | 0.0286 | 0.1407 | 0.20 | 0.96 | -0.476 | 0.435 | 285 | 336 |
+| enet | value | decile | 0.0202 | 0.1806 | 0.11 | 0.52 | -0.472 | 0.347 | 285 | 249 |
+| enet | value | band | 0.0110 | 0.1597 | 0.07 | 0.31 | -0.444 | 0.358 | 285 | 323 |
+| lgbm | equal | decile | 0.1693 | 0.1202 | 1.41 | 5.51 | -0.287 | 0.726 | 285 | 370 |
+| lgbm | equal | band | 0.1557 | 0.1102 | 1.41 | 5.44 | -0.268 | 0.709 | 285 | 465 |
+| lgbm | value | decile | 0.0829 | 0.1787 | 0.46 | 2.14 | -0.509 | 0.554 | 285 | 355 |
+| lgbm | value | band | 0.0798 | 0.1542 | 0.52 | 2.34 | -0.390 | 0.537 | 285 | 446 |
+| combo | equal | decile | 0.1487 | 0.1391 | 1.07 | 4.44 | -0.390 | 0.716 | 285 | 369 |
+| combo | equal | band | 0.1283 | 0.1294 | 0.99 | 4.09 | -0.378 | 0.712 | 285 | 470 |
+| combo | value | decile | 0.0719 | 0.1755 | 0.41 | 1.71 | -0.455 | 0.565 | 285 | 359 |
+| combo | value | band | 0.0563 | 0.1617 | 0.35 | 1.46 | -0.397 | 0.509 | 285 | 458 |
 
 ## Decile long-short portfolios NET of costs
 
@@ -130,107 +128,51 @@
 - `sharpe_net_est`: Sharpe after paying each stock's estimated half-spread (table below) plus the borrow fee. `avg_cost_bps`: what that averaged per dollar traded. Stocks sold after leaving the universe pay that month's highest group cost.
 - `breakeven_bps`: the flat trading cost at which the average net return is zero. Compare it with `avg_cost_bps`.
 
-| portfolio | direction | weighting | legs | avg_turnover | sharpe | sharpe_net_10bps | sharpe_net_20bps | sharpe_net_50bps | avg_cost_bps | sharpe_net_est | breakeven_bps |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ols | learned | equal | decile | 1.74 | 0.71 | 0.53 | 0.39 | -0.03 | 39 | 0.13 | 48 |
-| ols | learned | equal | band | 1.05 | 0.63 | 0.50 | 0.40 | 0.13 | 40 | 0.22 | 64 |
-| ols | learned | value | decile | 1.86 | 0.27 | 0.12 | -0.01 | -0.38 | 17 | 0.03 | 20 |
-| ols | learned | value | band | 1.01 | 0.24 | 0.13 | 0.06 | -0.17 | 18 | 0.08 | 28 |
-| enet | learned | equal | decile | 1.63 | 0.27 | 0.19 | 0.08 | -0.25 | 39 | -0.12 | 19 |
-| enet | learned | equal | band | 1.04 | 0.21 | 0.14 | 0.07 | -0.16 | 41 | -0.09 | 20 |
-| enet | learned | value | decile | 1.68 | 0.13 | 0.04 | -0.05 | -0.31 | 17 | -0.02 | 10 |
-| enet | learned | value | band | 0.98 | 0.11 | 0.05 | -0.01 | -0.18 | 18 | 0.00 | 12 |
-| lgbm | learned | equal | decile | 2.09 | 1.30 | 1.06 | 0.85 | 0.25 | 49 | 0.26 | 62 |
-| lgbm | learned | equal | band | 1.46 | 1.22 | 1.03 | 0.87 | 0.41 | 49 | 0.41 | 77 |
-| lgbm | learned | value | decile | 2.25 | 0.36 | 0.22 | 0.10 | -0.25 | 21 | 0.09 | 29 |
-| lgbm | learned | value | band | 1.48 | 0.42 | 0.31 | 0.22 | -0.03 | 21 | 0.21 | 46 |
-| combo | learned | equal | decile | 1.89 | 0.94 | 0.76 | 0.61 | 0.17 | 42 | 0.28 | 61 |
-| combo | learned | equal | band | 1.23 | 0.83 | 0.69 | 0.59 | 0.27 | 43 | 0.34 | 76 |
-| combo | learned | value | decile | 2.28 | 0.31 | 0.15 | 0.01 | -0.41 | 18 | 0.03 | 20 |
-| combo | learned | value | band | 1.32 | 0.34 | 0.22 | 0.13 | -0.15 | 19 | 0.14 | 34 |
-| signal_mom_12_1 | high | equal | decile | 1.34 | 0.40 | 0.29 | 0.20 | -0.06 | 42 | 0.01 | 43 |
-| signal_mom_12_1 | high | equal | band | 0.88 | 0.37 | 0.28 | 0.22 | 0.03 | 44 | 0.06 | 54 |
-| signal_mom_12_1 | high | value | decile | 1.50 | 0.40 | 0.31 | 0.24 | 0.04 | 19 | 0.25 | 56 |
-| signal_mom_12_1 | high | value | band | 0.83 | 0.29 | 0.23 | 0.19 | 0.06 | 19 | 0.19 | 66 |
-| signal_log_mcap | low | equal | decile | 0.38 | -0.61 | -0.71 | -0.75 | -0.89 | 68 | -0.97 | -146 |
-| signal_log_mcap | low | equal | band | 0.26 | -0.51 | -0.59 | -0.62 | -0.72 | 70 | -0.79 | -169 |
-| signal_log_mcap | low | value | decile | 0.30 | -0.48 | -0.57 | -0.60 | -0.71 | 78 | -0.81 | -151 |
-| signal_log_mcap | low | value | band | 0.14 | -0.36 | -0.43 | -0.44 | -0.50 | 79 | -0.54 | -245 |
-| signal_bm | high | equal | decile | 0.68 | 0.18 | 0.09 | 0.03 | -0.13 | 48 | -0.12 | 26 |
-| signal_bm | high | equal | band | 0.39 | 0.16 | 0.09 | 0.05 | -0.06 | 50 | -0.06 | 34 |
-| signal_bm | high | value | decile | 0.55 | -0.16 | -0.21 | -0.24 | -0.33 | 22 | -0.25 | -59 |
-| signal_bm | high | value | band | 0.17 | -0.09 | -0.12 | -0.13 | -0.17 | 27 | -0.14 | -105 |
-| signal_rev_1m | low | equal | decile | 3.48 | 0.23 | -0.09 | -0.38 | -1.23 | 40 | -0.95 | 7 |
-| signal_rev_1m | low | equal | band | 3.09 | 0.20 | -0.10 | -0.36 | -1.14 | 40 | -0.89 | 6 |
-| signal_rev_1m | low | value | decile | 3.68 | -0.17 | -0.40 | -0.60 | -1.21 | 18 | -0.55 | -9 |
-| signal_rev_1m | low | value | band | 3.33 | -0.16 | -0.37 | -0.57 | -1.14 | 18 | -0.52 | -9 |
-| signal_gp_a | high | equal | decile | 0.43 | 0.83 | 0.73 | 0.68 | 0.52 | 44 | 0.56 | 149 |
-| signal_gp_a | high | equal | band | 0.30 | 0.78 | 0.68 | 0.64 | 0.51 | 46 | 0.53 | 173 |
-| signal_gp_a | high | value | decile | 0.31 | 0.67 | 0.60 | 0.57 | 0.48 | 15 | 0.58 | 210 |
-| signal_gp_a | high | value | band | 0.09 | 0.61 | 0.56 | 0.55 | 0.52 | 21 | 0.55 | 565 |
-| signal_asset_growth | low | equal | decile | 0.80 | 0.08 | -0.07 | -0.17 | -0.46 | 44 | -0.40 | 3 |
-| signal_asset_growth | low | equal | band | 0.60 | 0.16 | 0.02 | -0.06 | -0.31 | 45 | -0.27 | 13 |
-| signal_asset_growth | low | value | decile | 0.71 | -0.07 | -0.17 | -0.23 | -0.42 | 18 | -0.22 | -17 |
-| signal_asset_growth | low | value | band | 0.42 | -0.00 | -0.08 | -0.12 | -0.24 | 18 | -0.12 | -11 |
-| signal_vol_3m | low | equal | decile | 1.18 | 0.16 | 0.08 | 0.02 | -0.16 | 48 | -0.14 | 24 |
-| signal_vol_3m | low | equal | band | 0.74 | 0.10 | 0.03 | -0.00 | -0.12 | 51 | -0.13 | 19 |
-| signal_vol_3m | low | value | decile | 1.23 | 0.04 | -0.03 | -0.07 | -0.22 | 22 | -0.08 | 5 |
-| signal_vol_3m | low | value | band | 0.71 | -0.01 | -0.05 | -0.08 | -0.17 | 22 | -0.09 | -8 |
+| portfolio | weighting | legs | avg_turnover | sharpe | sharpe_net_10bps | sharpe_net_20bps | sharpe_net_50bps | avg_cost_bps | sharpe_net_est | breakeven_bps |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ols | equal | decile | 2.17 | 0.94 | 0.71 | 0.52 | -0.07 | 39 | 0.16 | 47 |
+| ols | equal | band | 1.41 | 0.77 | 0.60 | 0.46 | 0.07 | 39 | 0.21 | 55 |
+| ols | value | decile | 2.41 | 0.39 | 0.19 | 0.01 | -0.52 | 17 | 0.07 | 21 |
+| ols | value | band | 1.47 | 0.33 | 0.17 | 0.05 | -0.32 | 17 | 0.09 | 24 |
+| enet | equal | decile | 1.93 | 0.30 | 0.20 | 0.07 | -0.32 | 39 | -0.18 | 18 |
+| enet | equal | band | 1.27 | 0.20 | 0.12 | 0.03 | -0.25 | 41 | -0.16 | 15 |
+| enet | value | decile | 2.09 | 0.11 | -0.01 | -0.13 | -0.48 | 17 | -0.09 | 6 |
+| enet | value | band | 1.32 | 0.07 | -0.03 | -0.11 | -0.36 | 18 | -0.09 | 4 |
+| lgbm | equal | decile | 2.14 | 1.41 | 1.15 | 0.94 | 0.30 | 44 | 0.43 | 64 |
+| lgbm | equal | band | 1.51 | 1.41 | 1.20 | 1.04 | 0.55 | 44 | 0.64 | 83 |
+| lgbm | value | decile | 2.27 | 0.46 | 0.28 | 0.13 | -0.33 | 18 | 0.16 | 29 |
+| lgbm | value | band | 1.59 | 0.52 | 0.36 | 0.24 | -0.14 | 18 | 0.26 | 39 |
+| combo | equal | decile | 2.22 | 1.07 | 0.84 | 0.65 | 0.07 | 40 | 0.27 | 54 |
+| combo | equal | band | 1.52 | 0.99 | 0.81 | 0.67 | 0.25 | 41 | 0.38 | 68 |
+| combo | value | decile | 2.60 | 0.41 | 0.20 | 0.03 | -0.51 | 17 | 0.08 | 21 |
+| combo | value | band | 1.70 | 0.35 | 0.19 | 0.06 | -0.31 | 17 | 0.10 | 25 |
 
 ## Selection bias: deflated Sharpe ratio
 
 **Real data, out-of-sample, net of estimated costs. Asks whether the best portfolio beats what luck alone would give the best of many tries.**
 
-- Trials: 48 = the 44 portfolios above plus 4 variants tried but not built (ridge and rolling-window OLS, each equal- or value-weighted). Every portfolio counts twice, plain and banded: the band is a second try at the same idea. Every row is judged against the same bar, since any of them could have been the one we picked.
-- Luck bar: with 48 skill-less trials whose Sharpes spread as ours do (std 0.40 annualised), the best would show a Sharpe of about 0.91 by chance (Bailey & Lopez de Prado 2014).
-- `psr`: probability the true Sharpe is above 0, allowing for skew and fat tails (Bailey & Lopez de Prado 2012). `dsr_nN`: probability it is above the luck bar for N trials. `dsr_n48` is the honest count; the others show how much the verdict depends on N. Above 0.95: survives selection.
+- Trials: 68 = the 16 portfolios above plus 52 seen or tried earlier and not shown here: 28 single-signal portfolios on the original 7 features, built in Steps 27-45; 16 ols, enet, lgbm and combo portfolios on the original 7 features (Steps 27-45); 8 ridge and rolling-window OLS, equal- or value-weighted, on 7 and on all features (tried, never built). A strategy we have looked at stays a trial even after it leaves the report. Every portfolio counts twice, plain and banded: the band is a second try at the same idea. Every row is judged against the same bar, since any of them could have been the one we picked.
+- Luck bar: with 68 skill-less trials whose Sharpes spread as ours do (std 0.42 annualised), the best would show a Sharpe of about 1.00 by chance (Bailey & Lopez de Prado 2014). The spread is measured on the 16 portfolios above plus the 28 earlier single-signal ones, rebuilt but not shown: the model portfolios alone are alike, and their narrower spread would lower the bar. The other earlier trials count in N only.
+- `psr`: probability the true Sharpe is above 0, allowing for skew and fat tails (Bailey & Lopez de Prado 2012). `dsr_nN`: probability it is above the luck bar for N trials. `dsr_n68` is the honest count; the others show how much the verdict depends on N. Above 0.95: survives selection.
 
-| portfolio | weighting | legs | sharpe_net_est | psr | dsr_n10 | dsr_n48 | dsr_n50 |
+| portfolio | weighting | legs | sharpe_net_est | psr | dsr_n20 | dsr_n68 | dsr_n100 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| signal_gp_a | value | decile | 0.58 | 0.998 | 0.406 | 0.056 | 0.052 |
-| signal_gp_a | equal | decile | 0.56 | 0.997 | 0.356 | 0.042 | 0.039 |
-| signal_gp_a | value | band | 0.55 | 0.997 | 0.341 | 0.037 | 0.034 |
-| signal_gp_a | equal | band | 0.53 | 0.996 | 0.309 | 0.031 | 0.029 |
-| lgbm | equal | band | 0.41 | 0.974 | 0.150 | 0.010 | 0.009 |
-| combo | equal | band | 0.34 | 0.942 | 0.087 | 0.004 | 0.004 |
-| combo | equal | decile | 0.28 | 0.905 | 0.053 | 0.002 | 0.002 |
-| lgbm | equal | decile | 0.26 | 0.893 | 0.040 | 0.001 | 0.001 |
-| signal_mom_12_1 | value | decile | 0.25 | 0.881 | 0.034 | 0.001 | 0.001 |
-| ols | equal | band | 0.22 | 0.844 | 0.026 | 0.001 | 0.001 |
-| lgbm | value | band | 0.21 | 0.849 | 0.019 | 0.000 | 0.000 |
-| signal_mom_12_1 | value | band | 0.19 | 0.817 | 0.017 | 0.000 | 0.000 |
-| combo | value | band | 0.14 | 0.744 | 0.008 | 0.000 | 0.000 |
-| ols | equal | decile | 0.13 | 0.731 | 0.009 | 0.000 | 0.000 |
-| lgbm | value | decile | 0.09 | 0.670 | 0.004 | 0.000 | 0.000 |
-| ols | value | band | 0.08 | 0.644 | 0.004 | 0.000 | 0.000 |
-| signal_mom_12_1 | equal | band | 0.06 | 0.620 | 0.003 | 0.000 | 0.000 |
-| combo | value | decile | 0.03 | 0.561 | 0.002 | 0.000 | 0.000 |
-| ols | value | decile | 0.03 | 0.557 | 0.002 | 0.000 | 0.000 |
-| signal_mom_12_1 | equal | decile | 0.01 | 0.516 | 0.001 | 0.000 | 0.000 |
-| enet | value | band | 0.00 | 0.502 | 0.005 | 0.000 | 0.000 |
-| enet | value | decile | -0.02 | 0.459 | 0.003 | 0.000 | 0.000 |
-| signal_bm | equal | band | -0.06 | 0.382 | 0.000 | 0.000 | 0.000 |
-| signal_vol_3m | value | decile | -0.08 | 0.341 | 0.000 | 0.000 | 0.000 |
-| enet | equal | band | -0.09 | 0.357 | 0.001 | 0.000 | 0.000 |
-| signal_vol_3m | value | band | -0.09 | 0.332 | 0.000 | 0.000 | 0.000 |
-| signal_asset_growth | value | band | -0.12 | 0.287 | 0.000 | 0.000 | 0.000 |
-| enet | equal | decile | -0.12 | 0.302 | 0.001 | 0.000 | 0.000 |
-| signal_bm | equal | decile | -0.12 | 0.274 | 0.000 | 0.000 | 0.000 |
-| signal_vol_3m | equal | band | -0.13 | 0.269 | 0.000 | 0.000 | 0.000 |
-| signal_bm | value | band | -0.14 | 0.246 | 0.000 | 0.000 | 0.000 |
-| signal_vol_3m | equal | decile | -0.14 | 0.239 | 0.000 | 0.000 | 0.000 |
-| signal_asset_growth | value | decile | -0.22 | 0.147 | 0.000 | 0.000 | 0.000 |
-| signal_bm | value | decile | -0.25 | 0.113 | 0.000 | 0.000 | 0.000 |
-| signal_asset_growth | equal | band | -0.27 | 0.100 | 0.000 | 0.000 | 0.000 |
-| signal_asset_growth | equal | decile | -0.40 | 0.026 | 0.000 | 0.000 | 0.000 |
-| signal_rev_1m | value | band | -0.52 | 0.007 | 0.000 | 0.000 | 0.000 |
-| signal_log_mcap | value | band | -0.54 | 0.004 | 0.000 | 0.000 | 0.000 |
-| signal_rev_1m | value | decile | -0.55 | 0.005 | 0.000 | 0.000 | 0.000 |
-| signal_log_mcap | equal | band | -0.79 | 0.000 | 0.000 | 0.000 | 0.000 |
-| signal_log_mcap | value | decile | -0.81 | 0.000 | 0.000 | 0.000 | 0.000 |
-| signal_rev_1m | equal | band | -0.89 | 0.000 | 0.000 | 0.000 | 0.000 |
-| signal_rev_1m | equal | decile | -0.95 | 0.000 | 0.000 | 0.000 | 0.000 |
-| signal_log_mcap | equal | decile | -0.97 | 0.000 | 0.000 | 0.000 | 0.000 |
+| lgbm | equal | band | 0.65 | 0.998 | 0.258 | 0.059 | 0.035 |
+| lgbm | equal | decile | 0.43 | 0.975 | 0.048 | 0.005 | 0.002 |
+| combo | equal | band | 0.38 | 0.955 | 0.032 | 0.003 | 0.001 |
+| combo | equal | decile | 0.27 | 0.890 | 0.008 | 0.000 | 0.000 |
+| lgbm | value | band | 0.26 | 0.896 | 0.005 | 0.000 | 0.000 |
+| ols | equal | band | 0.21 | 0.834 | 0.003 | 0.000 | 0.000 |
+| ols | equal | decile | 0.16 | 0.769 | 0.001 | 0.000 | 0.000 |
+| lgbm | value | decile | 0.16 | 0.775 | 0.001 | 0.000 | 0.000 |
+| combo | value | band | 0.10 | 0.693 | 0.000 | 0.000 | 0.000 |
+| ols | value | band | 0.09 | 0.671 | 0.000 | 0.000 | 0.000 |
+| combo | value | decile | 0.08 | 0.649 | 0.000 | 0.000 | 0.000 |
+| ols | value | decile | 0.07 | 0.629 | 0.000 | 0.000 | 0.000 |
+| enet | value | decile | -0.09 | 0.355 | 0.000 | 0.000 | 0.000 |
+| enet | value | band | -0.09 | 0.351 | 0.000 | 0.000 | 0.000 |
+| enet | equal | band | -0.16 | 0.249 | 0.000 | 0.000 | 0.000 |
+| enet | equal | decile | -0.18 | 0.225 | 0.000 | 0.000 | 0.000 |
 
 ## Estimated trading cost by company size
 
@@ -247,3 +189,42 @@
 | 2001-2008 | 101.7 | 75.3 | 60.1 | 54.5 | 43.3 | 35.4 | 26.0 | 17.6 | 13.9 | 17.2 |
 | 2009-2015 | 96.5 | 56.2 | 44.6 | 34.6 | 26.5 | 22.5 | 18.9 | 16.3 | 17.2 | 17.1 |
 | 2016-2026 | 84.7 | 47.0 | 35.5 | 29.0 | 24.3 | 19.3 | 17.9 | 16.0 | 12.1 | 14.0 |
+
+## Appendix: single-signal scores
+
+**Real data, out-of-sample months (same as the models). Each raw signal used directly as a forecast; IC only, no portfolios.**
+
+- `osap`: the Open Source Asset Pricing signal it replicates (blank: our own). `published_sign`: the direction its original paper reported, from the signal catalogue; a NEGATIVE IC is the expected result for a `-1` signal.
+- `sign_agrees`: our out-of-sample IC has the published sign. 19 of 28 agree; 9 agree with |NW t| >= 2.
+- Signals are not traded on their own any more; the 28 single-signal portfolios built earlier still count as trials (see the deflated Sharpe ratio).
+
+| feature | osap | published_sign | mean_ic | ic_nw_t_stat | ic_hit_rate | ic_months | sign_agrees |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| mom_12_1 | Mom12m | +1 | 0.0131 | 1.87 | 0.579 | 285 | yes |
+| log_mcap | Size | -1 | 0.0334 | 6.73 | 0.635 | 285 | no |
+| bm | BM | +1 | 0.0081 | 1.10 | 0.505 | 285 | yes |
+| rev_1m | STreversal | -1 | -0.0205 | -3.72 | 0.418 | 285 | yes |
+| gp_a | GP | +1 | 0.0110 | 2.27 | 0.582 | 285 | yes |
+| asset_growth | AssetGrowth | -1 | 0.0020 | 0.46 | 0.512 | 285 | no |
+| vol_3m |  | -1 | -0.0439 | -4.84 | 0.386 | 285 | yes |
+| mom_6m | Mom6m | +1 | 0.0104 | 1.87 | 0.572 | 285 | yes |
+| int_mom | IntMom | +1 | 0.0091 | 1.44 | 0.568 | 285 | yes |
+| mr_reversal | MRreversal | -1 | 0.0084 | 1.65 | 0.593 | 285 | no |
+| lr_reversal | LRreversal | -1 | 0.0185 | 2.92 | 0.589 | 285 | no |
+| mom_rev | MomRev | +1 | -0.0101 | -0.96 | 0.481 | 285 | no |
+| mom_season_short | MomSeasonShort | +1 | 0.0005 | 0.11 | 0.498 | 285 | yes |
+| mom_season | MomSeason | +1 | 0.0091 | 2.77 | 0.568 | 285 | yes |
+| mom_season_6y | MomSeason06YrPlus | +1 | 0.0090 | 2.69 | 0.553 | 273 | yes |
+| mom_season_11y | MomSeason11YrPlus | +1 | 0.0071 | 1.88 | 0.540 | 213 | yes |
+| mom_season_16y | MomSeason16YrPlus | +1 | 0.0102 | 2.52 | 0.575 | 153 | yes |
+| mom_offseason_12m | Mom12mOffSeason | +1 | 0.0108 | 1.82 | 0.561 | 285 | yes |
+| mom_offseason | MomOffSeason | -1 | 0.0061 | 1.03 | 0.558 | 285 | no |
+| mom_offseason_6y | MomOffSeason06YrPlus | -1 | -0.0069 | -1.81 | 0.447 | 284 | yes |
+| mom_offseason_11y | MomOffSeason11YrPlus | -1 | -0.0051 | -1.08 | 0.473 | 224 | yes |
+| mom_offseason_16y | MomOffSeason16YrPlus | -1 | -0.0011 | -0.26 | 0.506 | 164 | yes |
+| max_ret | MaxRet | -1 | -0.0414 | -5.53 | 0.375 | 285 | yes |
+| return_skew | ReturnSkew | -1 | -0.0113 | -4.79 | 0.393 | 285 | yes |
+| high_52 | High52 | +1 | 0.0209 | 2.31 | 0.579 | 285 | yes |
+| illiquidity | Illiquidity | +1 | -0.0313 | -6.01 | 0.379 | 285 | no |
+| dol_vol | DolVol | -1 | 0.0248 | 4.35 | 0.568 | 285 | no |
+| vol_sd | VolSD | -1 | 0.0226 | 4.26 | 0.575 | 285 | no |

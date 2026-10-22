@@ -26,7 +26,7 @@ STATUSES = ("existing", "computable", "approximate", "not_available")
 USABLE = ("computable", "approximate")
 SHARADAR_TABLES = ("sep", "sf1", "tickers", "actions")
 EXTERNAL_SOURCES = ("kenfrench", "fred", "pastor")
-# OSAP acronym -> our pipeline feature, for signals we already build.
+# OSAP acronym -> our pipeline feature, for signals the catalogue marks `existing`.
 EXISTING_FEATURES = {
     "Mom12m": "mom_12_1",
     "Size": "log_mcap",
@@ -35,6 +35,41 @@ EXISTING_FEATURES = {
     "GP": "gp_a",
     "AssetGrowth": "asset_growth",
 }
+# Every built feature that replicates an OSAP signal: feature -> OSAP acronym, in
+# the order features enter the models.
+FEATURE_ACRONYMS = {
+    **{feature: acronym for acronym, feature in EXISTING_FEATURES.items()},
+    # Step 47: momentum and reversal
+    "mom_6m": "Mom6m",
+    "int_mom": "IntMom",
+    "mr_reversal": "MRreversal",
+    "lr_reversal": "LRreversal",
+    "mom_rev": "MomRev",
+    # Step 48: seasonality
+    "mom_season_short": "MomSeasonShort",
+    "mom_season": "MomSeason",
+    "mom_season_6y": "MomSeason06YrPlus",
+    "mom_season_11y": "MomSeason11YrPlus",
+    "mom_season_16y": "MomSeason16YrPlus",
+    "mom_offseason_12m": "Mom12mOffSeason",
+    "mom_offseason": "MomOffSeason",
+    "mom_offseason_6y": "MomOffSeason06YrPlus",
+    "mom_offseason_11y": "MomOffSeason11YrPlus",
+    "mom_offseason_16y": "MomOffSeason16YrPlus",
+    # Step 50: daily-price signals
+    "max_ret": "MaxRet",
+    "return_skew": "ReturnSkew",
+    "high_52": "High52",
+    "illiquidity": "Illiquidity",
+    "dol_vol": "DolVol",
+    "vol_sd": "VolSD",
+}
+
+
+def published_signs(path: Path = CATALOGUE_PATH) -> dict[str, int]:
+    """feature -> the sign its original paper published (from the catalogue)."""
+    signs = load_catalogue(path).set_index("acronym")["sign"]
+    return {feature: int(signs[acronym]) for feature, acronym in FEATURE_ACRONYMS.items()}
 
 
 def load_catalogue(path: Path = CATALOGUE_PATH) -> pd.DataFrame:
