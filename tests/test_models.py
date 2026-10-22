@@ -1,10 +1,11 @@
 import numpy as np
 import pandas as pd
 import pytest
-from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.linear_model import ElasticNet, LinearRegression, Ridge
 
 from alpha_survival.models import (
     TARGET,
+    ElasticNetForecaster,
     Forecaster,
     HistoricalMean,
     LGBMForecaster,
@@ -182,3 +183,57 @@ def test_lgbm_rejects_nan_features_and_target_in_predict():
         model.fit(gappy)
     with pytest.raises(ValueError, match="must not see the target"):
         model.fit(u_shaped_rows()).predict(u_shaped_rows())
+
+
+def monthly_rows(
+    n_months: int = 20,
+    per_month: int = 200,
+    signal: float = 1.0,
+    noise: float = 0.01,
+    seed: int = 0,
+) -> pd.DataFrame:
+    """Panel-shaped rows: fwd_ret = signal * (0.02 * a - 0.03 * b) + noise."""
+    rng = np.random.default_rng(seed)
+    n = n_months * per_month
+    months = pd.date_range("2000-01-31", periods=n_months, freq="ME")
+    rows = pd.DataFrame(
+        {"month_end": np.repeat(months, per_month), "a": rng.uniform(-1, 1, n)}
+    ).assign(b=rng.uniform(-1, 1, n))
+    rows[TARGET] = signal * (0.02 * rows["a"] - 0.03 * rows["b"]) + rng.normal(0, noise, n)
+    return rows
+
+
+def test_enet_keeps_a_real_signal_with_a_weak_penalty():
+    model = ElasticNetForecaster(["a", "b"]).fit(monthly_rows())
+    assert model.alpha_ <= 1e-3
+    assert model.estimator_.coef_ == pytest.approx([0.02, -0.03], abs=0.002)
+    assert len(model.val_mse_) == 9 and model.val_mse_.idxmin() == model.alpha_
+
+
+def test_enet_validates_on_the_latest_training_months():
+    # Same first 16 months; only the last 4 (the validation 20%) differ. If the signal
+    # vanishes there, the penalty that ignored it wins; so the split is in time, at the end.
+    early = monthly_rows()
+    early = early[early["month_end"] < early["month_end"].unique()[16]]
+    late_signal = monthly_rows(seed=1).loc[lambda r: r["month_end"] >= "2001-05-31"]
+    late_noise = late_signal.assign(
+        **{TARGET: lambda r: np.random.default_rng(2).normal(0, 0.01, len(r))}
+    )
+
+    kept = ElasticNetForecaster(["a", "b"]).fit(pd.concat([early, late_signal]))
+    dropped = ElasticNetForecaster(["a", "b"]).fit(pd.concat([early, late_noise]))
+    assert kept.alpha_ <= 1e-3
+    assert (dropped.estimator_.coef_ == 0).all()
+
+
+def test_enet_refits_the_chosen_penalty_on_all_training_months():
+    train = monthly_rows(noise=0.05)
+    model = ElasticNetForecaster(["a", "b"]).fit(train)
+    full = ElasticNet(alpha=model.alpha_, l1_ratio=0.5).fit(train[["a", "b"]], train[TARGET])
+    assert model.estimator_.coef_ == pytest.approx(full.coef_)
+    assert model.estimator.get_params()["alpha"] == 1.0  # template untouched
+
+
+def test_enet_needs_enough_months_to_validate():
+    with pytest.raises(ValueError, match="too few to validate"):
+        ElasticNetForecaster(["a", "b"]).fit(monthly_rows(n_months=2))

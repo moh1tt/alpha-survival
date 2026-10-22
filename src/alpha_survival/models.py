@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 from lightgbm import LGBMRegressor
 from sklearn.base import RegressorMixin, clone
+from sklearn.linear_model import ElasticNet
 
 TARGET = "fwd_ret"
 
@@ -121,6 +122,58 @@ class SklearnForecaster(Forecaster):
         if self.estimator_ is None:
             raise RuntimeError(f"{self.name} must be fit before predict")
         return self.estimator_.predict(self._matrix(rows))
+
+
+# Penalty strengths ElasticNet chooses from. With features in [-1, 1] and monthly
+# returns, useful coefficients are ~0.001-0.01: 1e-5 barely shrinks, 0.1 zeroes all.
+ENET_ALPHAS = np.logspace(-5, -1, 9)
+
+
+class ElasticNetForecaster(SklearnForecaster):
+    """Linear model with a Lasso + Ridge penalty, its strength chosen inside each fit.
+
+    The Lasso part can set useless coefficients to exactly zero; the Ridge part keeps
+    correlated features from swapping weight erratically (Zou & Hastie 2005; used in
+    Gu, Kelly & Xiu 2020). The penalty must be chosen, and only from training data:
+    the latest `val_frac` of training months are held out, each alpha is fit on the
+    earlier months and scored by MSE on the held-out ones, and the winner is refit on
+    all training months. With a one-month target no purge is needed between the two
+    (see cv.py). `l1_ratio` and `val_frac` are fixed in advance, not tuned.
+    """
+
+    def __init__(
+        self,
+        features: list[str],
+        name: str = "enet",
+        alphas: np.ndarray = ENET_ALPHAS,
+        l1_ratio: float = 0.5,
+        val_frac: float = 0.2,
+    ) -> None:
+        super().__init__(ElasticNet(l1_ratio=l1_ratio), features, name)
+        self.alphas = np.asarray(alphas, dtype=float)
+        self.val_frac = val_frac
+        self.alpha_: float | None = None
+        self.val_mse_: pd.Series | None = None
+
+    def fit(self, train: pd.DataFrame) -> ElasticNetForecaster:
+        months = np.sort(train["month_end"].unique())
+        n_val = int(round(self.val_frac * len(months)))
+        if n_val < 1 or n_val >= len(months):
+            raise ValueError(f"{self.name}: {len(months)} training months is too few to validate")
+        is_val = train["month_end"] >= months[-n_val]
+        fit_rows, val_rows = train[~is_val], train[is_val]
+        x_fit, x_val = self._matrix(fit_rows), self._matrix(val_rows)
+
+        mse = {}
+        for alpha in self.alphas:
+            model = clone(self.estimator).set_params(alpha=alpha).fit(x_fit, fit_rows[TARGET])
+            mse[alpha] = float(np.mean((val_rows[TARGET] - model.predict(x_val)) ** 2))
+        self.val_mse_ = pd.Series(mse, name="val_mse").rename_axis("alpha")
+        self.alpha_ = float(self.val_mse_.idxmin())
+
+        estimator = clone(self.estimator).set_params(alpha=self.alpha_)
+        self.estimator_ = estimator.fit(self._matrix(train), train[TARGET])
+        return self
 
 
 # Fixed, conservative settings (not tuned): shallow trees, slow learning, row and
