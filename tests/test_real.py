@@ -819,3 +819,30 @@ def test_monthly_corwin_schultz_terms_file_each_pair_under_its_later_day():
     for month in ["2024-01-31", "2024-02-29"]:  # one pair each
         row = out.loc[pd.Timestamp(month)]
         assert row["cs_n"] == 1 and row["cs_sum"] == pytest.approx(0.02)
+
+
+def test_quarterly_fundamentals_join_point_in_time_with_suffix():
+    filings = pd.concat(
+        [
+            filing_rows("AAA", ["2024-01-10"], ["2023-12-31"], [500.0], dimension="ART"),
+            filing_rows(
+                "AAA",
+                ["2024-01-10", "2024-02-29"],
+                ["2023-12-31", "2024-01-31"],
+                [130.0, 140.0],
+                dimension="ARQ",
+            ),
+        ]
+    )
+    master, keys = master_for("AAA"), keys_for(1, MONTHS)
+    panel = real.build_panel(
+        keys.assign(ret=0.0), real.build_fundamentals(filings, master, keys, "ART")
+    )
+    quarterly = real.build_fundamentals(filings, master, keys, "ARQ")
+    out = real.add_quarterly_fundamentals(panel, quarterly)
+    assert list(out["revenue"]) == [500.0] * 3  # ART untouched
+    # The 2024-02-29 filing is public from March 1: not in February's row.
+    assert list(out["revenue_q"]) == [130.0, 130.0, 140.0]
+    assert list(out["filing_date_q"]) == list(pd.to_datetime(["2024-01-10"] * 2 + ["2024-02-29"]))
+    assert {"period_end_q", "filing_date", "period_end"} <= set(out.columns)
+    assert len(out) == len(panel)

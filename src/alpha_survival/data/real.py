@@ -527,20 +527,77 @@ def build_fundamentals(
 
 
 def load_fundamentals(
-    keys: pd.DataFrame, raw_dir: Path = RAW_DIR, dimension: str = "ART"
+    keys: pd.DataFrame,
+    raw_dir: Path = RAW_DIR,
+    dimension: str = "ART",
+    fields: list[str] | None = None,
 ) -> pd.DataFrame:
     """Read `fundamentals` + `tickers` from disk and build point-in-time fundamentals.
 
     Reads only `dimension` rows for the stocks in `keys`: filings of companies
     with no price history (23 tickers on the full file) can never join the panel.
+    `fields`: the value columns to read (default: all).
     """
     master = load_security_master(raw_dir)
     tickers = master.loc[master["permaticker"].isin(keys["permaticker"]), "ticker"]
+    columns = None if fields is None else ["ticker", "dimension", "date", "reportperiod", *fields]
     raw = pd.read_parquet(
         raw_dir / "fundamentals.parquet",
+        columns=columns,
         filters=[("dimension", "==", dimension), ("ticker", "in", list(tickers))],
     )
     return build_fundamentals(raw, master, keys, dimension)
+
+
+# Quarterly (ARQ) fields carried next to the trailing-twelve-month ones, with suffix
+# `_q`, for signals built on single quarters (e.g. roaq, NumEarnIncrease). A subset:
+# all ~105 would add ~1.5 GB to the panel. Add a field here when a signal needs it.
+# ARQ flows (revenue, income, cash flows) are single quarters, not year to date:
+# AAPL's four 2022 quarters of revenue sum to its ART revenue for 2022.
+QUARTERLY_FIELDS = [
+    "revenue",
+    "cor",
+    "gp",
+    "sgna",
+    "rnd",
+    "opinc",
+    "intexp",
+    "taxexp",
+    "netinc",
+    "eps",
+    "depamor",
+    "ncfo",
+    "capex",
+    "ncfdiv",
+    "assets",
+    "assetsc",
+    "cashneq",
+    "receivables",
+    "inventory",
+    "ppnenet",
+    "liabilities",
+    "liabilitiesc",
+    "debt",
+    "debtc",
+    "debtnc",
+    "equity",
+    "sharesbas",
+]
+QUARTERLY_SUFFIX = "_q"
+
+
+def add_quarterly_fundamentals(panel: pd.DataFrame, quarterly: pd.DataFrame) -> pd.DataFrame:
+    """Join quarterly fundamentals (`build_fundamentals(..., "ARQ")`) onto the panel.
+
+    Every column but the keys gets `QUARTERLY_SUFFIX`: `netinc_q` is the latest
+    quarter's net income, `filing_date_q` / `period_end_q` its filing and quarter
+    end. The same point-in-time rule as for ART: only filings public before
+    month_end, none older than `MAX_FILING_AGE`.
+    """
+    keys = ["permaticker", "month_end"]
+    values = [c for c in quarterly.columns if c not in keys]
+    renamed = quarterly.rename(columns={c: c + QUARTERLY_SUFFIX for c in values})
+    return panel.merge(renamed, on=keys, how="left", validate="one_to_one")
 
 
 def build_panel(monthly: pd.DataFrame, fundamentals: pd.DataFrame) -> pd.DataFrame:
@@ -622,9 +679,16 @@ def load_panel(
     dimension: str = "ART",
     penalise_unexplained: bool = True,
     min_price: float = MIN_PRICE,
+    quarterly: bool = True,
 ) -> pd.DataFrame:
-    """Read everything from disk and build the monthly modelling panel."""
+    """Read everything from disk and build the monthly modelling panel.
+
+    `quarterly`: also join `QUARTERLY_FIELDS` from ARQ filings (suffix `_q`).
+    """
     monthly = load_monthly_returns(raw_dir, as_of, penalise_unexplained)
     panel = build_panel(monthly, load_fundamentals(monthly, raw_dir, dimension))
+    if quarterly:
+        arq = load_fundamentals(monthly, raw_dir, "ARQ", QUARTERLY_FIELDS)
+        panel = add_quarterly_fundamentals(panel, arq)
     panel = add_sic_code(add_market_cap(panel), load_security_master(raw_dir))
     return flag_investable(panel, min_price)
