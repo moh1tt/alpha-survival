@@ -147,6 +147,20 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     `ar_n`, `ar_sum`: count and sum of the month's Abdi-Ranaldo day-pair terms
     (`abdi_ranaldo_product`), so the spread can be estimated over any group of
     stocks and months (see `portfolio.estimated_spread_bps`).
+
+    More daily summaries for price and trading signals, all from days within the
+    month (so known at month end):
+    - `dret_max`: largest daily return; `dret_sumcube`: sum of cubed daily returns
+      (with the count, sum and sum of squares, enough for skewness).
+    - `close_max`: highest split-adjusted close. Only for ratios with other `close`
+      values (e.g. 52-week high), where the backward split adjustment cancels.
+    - `share_volume`, `dollar_volume`: sums of daily volume and close x volume.
+      Sharadar's `volume` is split-adjusted like `close` (checked on AAPL's 2020
+      4:1 split), so their product is the true dollars traded; `closeunadj` x
+      `volume` would overstate pre-split days.
+    - `illiq_sum`, `illiq_n`: sum and count of daily |return| / dollar volume over
+      days that traded (Amihud 2002).
+    - `n_trade_days`: days with a price row; `n_zero_volume`: those with no volume.
     """
     if stocks.duplicated(["ticker", "date"]).any():
         raise ValueError("stocks has duplicate (ticker, date) rows")
@@ -168,8 +182,15 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     prev_daily = daily.groupby("permaticker")["closeadj"].shift(1)
     daily["dret"] = daily["closeadj"] / prev_daily - 1
     daily["ar_product"] = abdi_ranaldo_product(daily)
+    dollars = daily["close"] * daily["volume"]
     moments = (
-        daily.assign(dret_sq=daily["dret"] ** 2)
+        daily.assign(
+            dret_sq=daily["dret"] ** 2,
+            dret_cube=daily["dret"] ** 3,
+            dollars=dollars,
+            illiq=(daily["dret"].abs() / dollars).where(dollars > 0),
+            zero_volume=daily["volume"] == 0,
+        )
         .groupby(["permaticker", "month"])
         .agg(
             n_days=("dret", "count"),
@@ -177,6 +198,15 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
             dret_sumsq=("dret_sq", "sum"),
             ar_n=("ar_product", "count"),
             ar_sum=("ar_product", "sum"),
+            dret_max=("dret", "max"),
+            dret_sumcube=("dret_cube", "sum"),
+            close_max=("close", "max"),
+            share_volume=("volume", "sum"),
+            dollar_volume=("dollars", "sum"),
+            illiq_sum=("illiq", "sum"),
+            illiq_n=("illiq", "count"),
+            n_trade_days=("date", "count"),
+            n_zero_volume=("zero_volume", "sum"),
         )
     )
 
@@ -206,8 +236,22 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     monthly = monthly.merge(moments, on=["permaticker", "month"], how="left", validate="one_to_one")
     monthly["month_end"] = monthly["month"].dt.to_timestamp(how="end").dt.normalize()
     cols = ["permaticker", "month_end", "ret", "last_trade_date", "close_unadj", "close_split_adj"]
-    cols += ["n_days", "dret_sum", "dret_sumsq", "ar_n", "ar_sum"]
+    cols += ["n_days", "dret_sum", "dret_sumsq", "ar_n", "ar_sum", *DAILY_SUMMARY_COLUMNS]
     return monthly[cols].reset_index(drop=True)
+
+
+# Extra per-month daily summaries for price/trading signals (see build_monthly_returns).
+DAILY_SUMMARY_COLUMNS = [
+    "dret_max",
+    "dret_sumcube",
+    "close_max",
+    "share_volume",
+    "dollar_volume",
+    "illiq_sum",
+    "illiq_n",
+    "n_trade_days",
+    "n_zero_volume",
+]
 
 
 # Sharadar `actions` types that name a distress exit: always penalised. For these

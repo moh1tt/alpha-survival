@@ -273,6 +273,38 @@ def test_daily_return_moments_per_month():
     assert out.loc[(2, feb), "dret_sum"] == pytest.approx(1.0)
 
 
+def test_daily_summaries_for_price_and_trading_signals_by_hand():
+    # Feb: three days. Daily returns (closeadj): Jan 31 -> Feb 1 +10%, then -20%, then 0%.
+    stocks = price_rows(
+        "AAA",
+        ["2024-01-31", "2024-02-01", "2024-02-02", "2024-02-05"],
+        [100.0, 110.0, 88.0, 88.0],
+        close=[50.0, 55.0, 44.0, 44.0],  # split-adjusted close: half closeadj
+    ).assign(volume=[10.0, 20.0, 5.0, 0.0])
+    out = real.build_monthly_returns(stocks, master_for("AAA")).set_index("month_end")
+    feb = out.loc[pd.Timestamp("2024-02-29")]
+    assert feb["dret_max"] == pytest.approx(0.10)
+    assert feb["dret_sumcube"] == pytest.approx(0.1**3 + (-0.2) ** 3)
+    assert feb["close_max"] == 55.0
+    assert feb["share_volume"] == 25.0
+    assert feb["dollar_volume"] == pytest.approx(55.0 * 20 + 44.0 * 5)  # close x volume
+    # Amihud: |ret| / dollars, only on days that traded (Feb 5 had no volume).
+    assert feb["illiq_n"] == 2
+    assert feb["illiq_sum"] == pytest.approx(0.10 / 1100 + 0.20 / 220)
+    assert feb["n_trade_days"] == 3 and feb["n_zero_volume"] == 1
+
+
+def test_daily_summaries_ignore_later_days():
+    # Leakage test: a wild March cannot change February's summaries.
+    dates = ["2024-01-31", "2024-02-01", "2024-02-29", "2024-03-01"]
+    base = price_rows("AAA", dates, [100.0, 110.0, 99.0, 100.0])
+    wild = price_rows("AAA", dates, [100.0, 110.0, 99.0, 900.0]).assign(volume=[1000.0] * 3 + [0])
+    a = real.build_monthly_returns(base, master_for("AAA"))
+    b = real.build_monthly_returns(wild, master_for("AAA"))
+    cols = real.DAILY_SUMMARY_COLUMNS
+    pd.testing.assert_frame_equal(a.loc[:1, cols], b.loc[:1, cols])
+
+
 def test_no_return_depends_on_future_prices():
     # Leakage test: changing prices after Feb must leave Jan and Feb returns untouched.
     dates = ["2024-01-31", "2024-02-29", "2024-03-28", "2024-04-30"]
