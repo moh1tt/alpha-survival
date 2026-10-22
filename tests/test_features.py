@@ -627,3 +627,73 @@ def test_valuation_ratios_use_only_their_own_row():
     a = features.add_valuation_ratios(rows.reset_index(drop=True))
     b = features.add_valuation_ratios(later.reset_index(drop=True))
     pd.testing.assert_frame_equal(a.loc[:0, cols], b.loc[:0, cols])
+
+
+def payout_panel(n_months=30, permaticker=1, start="2020-01-31", **overrides):
+    """One stock's monthly rows; market cap = 1000 + 10 x month number."""
+    i = np.arange(n_months, dtype=float)
+    frame = pd.concat([accounting_row(permaticker=permaticker)] * n_months, ignore_index=True)
+    frame["month_end"] = pd.date_range(start, periods=n_months, freq="ME")
+    frame["market_cap"] = 1000.0 + 10 * i
+    frame["ncfdiv"] = -20.0  # dividends paid (an outflow)
+    frame["ncfcommon"] = -30.0  # net buyback
+    frame["sic_code"] = 3571.0
+    for col, value in overrides.items():
+        frame[col] = value
+    return frame
+
+
+def test_payout_yields_by_hand_over_cap_six_months_earlier():
+    out = features.add_book_payout_debt_ratios(payout_panel())
+    t = 26  # cap at month 20 = 1200
+    assert out["payout_yield"].iloc[t] == pytest.approx((20 + 30) / 1200)
+    assert out["net_payout_yield"].iloc[t] == pytest.approx((20 + 30) / 1200)
+    assert out["payout_yield"].iloc[:23].isna().all()  # before the 24th month
+    issuer = features.add_book_payout_debt_ratios(payout_panel(ncfcommon=50.0))
+    assert issuer["payout_yield"].iloc[t] == pytest.approx(20 / 1200)  # issuance ignored
+    assert issuer["net_payout_yield"].iloc[t] == pytest.approx((20 - 50) / 1200)
+
+
+def test_payout_and_net_debt_exclusions():
+    bank = features.add_book_payout_debt_ratios(payout_panel(sic_code=6022.0))
+    assert bank[["payout_yield", "net_payout_yield", "net_debt_price"]].isna().all().all()
+    assert bank["ebm"].notna().all()  # EBM has no industry rule
+    none = features.add_book_payout_debt_ratios(payout_panel(ncfdiv=0.0, ncfcommon=0.0))
+    assert none[["payout_yield", "net_payout_yield"]].isna().all().all()
+    negative_book = features.add_book_payout_debt_ratios(payout_panel(equity=-1.0))
+    assert negative_book["net_payout_yield"].isna().all()
+
+
+def test_bm_dec_uses_last_december_from_june_and_the_one_before_until_may():
+    out = features.add_book_payout_debt_ratios(payout_panel(n_months=36, start="2020-01-31"))
+    out = out.set_index(out["month_end"].dt.strftime("%Y-%m"))
+    dec_2020, dec_2021 = 1000 + 10 * 11, 1000 + 10 * 23
+    assert out.loc["2022-05", "bm_dec"] == pytest.approx(800 / dec_2020)
+    assert out.loc["2022-06", "bm_dec"] == pytest.approx(800 / dec_2021)
+    assert np.isnan(out.loc["2021-05", "bm_dec"])  # needs Dec 2019: before the data
+
+
+def test_ebm_bpebm_and_net_debt_by_hand():
+    out = features.add_book_payout_debt_ratios(payout_panel()).iloc[0]
+    ebm = (800 + 100 - 400) / (1000 + 100 - 400)
+    assert out["ebm"] == pytest.approx(ebm)
+    assert out["bpebm"] == pytest.approx(800 / 1000 - ebm)
+
+
+def test_net_debt_price_only_for_the_top_three_fifths_of_book_to_market():
+    stocks = [payout_panel(n_months=1, permaticker=k, equity=100.0 * (k + 1)) for k in range(5)]
+    out = features.add_book_payout_debt_ratios(pd.concat(stocks, ignore_index=True))
+    out = out.set_index("permaticker")
+    assert out.loc[[0, 1], "net_debt_price"].isna().all()  # lowest two B/M fifths
+    assert out.loc[[2, 3, 4], "net_debt_price"].to_numpy() == pytest.approx([0.3] * 3)
+
+
+def test_book_payout_debt_ratios_ignore_later_months_and_other_stocks():
+    cols = ["bm_dec", "payout_yield", "net_payout_yield", "ebm", "bpebm"]
+    base = features.add_book_payout_debt_ratios(payout_panel(n_months=36))
+    shocked = payout_panel(n_months=36)
+    shocked.loc[shocked.index >= 30, ["market_cap", "equity", "ncfdiv"]] = [1.0, -9e9, 9e9]
+    other = payout_panel(n_months=36, permaticker=2, market_cap=1e12, equity=1.0)
+    out = features.add_book_payout_debt_ratios(pd.concat([shocked, other], ignore_index=True))
+    out = out[out["permaticker"] == 1].reset_index(drop=True)
+    pd.testing.assert_frame_equal(out.loc[:29, cols], base.loc[:29, cols])

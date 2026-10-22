@@ -24,6 +24,7 @@ SECURITY_MASTER_COLUMNS = {
     "isdelisted": "is_delisted",
     "firstpricedate": "first_price_date",
     "lastpricedate": "last_price_date",
+    "siccode": "sic_code",
 }
 
 # How `tickers.table` names the stock-price table: row queries say "stocks", the
@@ -603,6 +604,18 @@ def add_market_cap(panel: pd.DataFrame) -> pd.DataFrame:
     return panel.assign(market_cap=panel["close_split_adj"] * shares)
 
 
+def add_sic_code(panel: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
+    """Add `sic_code`: the stock's Standard Industrial Classification code.
+
+    CAUTION: Sharadar keeps only the CURRENT code, so a firm that changed industry
+    carries its latest code back through its history: a mild look-ahead. Use it
+    only where a replication needs an industry (e.g. dropping financials, SIC
+    6000-6999) and flag those signals as approximate. Industry changes are rare.
+    """
+    codes = master[["permaticker", "sic_code"]]
+    return panel.merge(codes, on="permaticker", how="left", validate="many_to_one")
+
+
 def load_panel(
     raw_dir: Path = RAW_DIR,
     as_of: pd.Timestamp | None = None,
@@ -613,5 +626,5 @@ def load_panel(
     """Read everything from disk and build the monthly modelling panel."""
     monthly = load_monthly_returns(raw_dir, as_of, penalise_unexplained)
     panel = build_panel(monthly, load_fundamentals(monthly, raw_dir, dimension))
-    panel = add_market_cap(panel)
+    panel = add_sic_code(add_market_cap(panel), load_security_master(raw_dir))
     return flag_investable(panel, min_price)

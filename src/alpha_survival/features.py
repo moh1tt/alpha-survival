@@ -254,6 +254,12 @@ def _rolling_slope(grid: pd.DataFrame, window: int, min_periods: int) -> pd.Data
     return ((n * sxy - sx * sy) / denom.where(denom > 0)).where(n >= min_periods)
 
 
+def _months_listed(panel: pd.DataFrame) -> pd.Series:
+    """Calendar months since the stock's first month in the panel, that month = 1."""
+    month = panel["month_end"].dt.year * 12 + panel["month_end"].dt.month
+    return month - month.groupby(panel["permaticker"]).transform("min") + 1
+
+
 def add_trend_price_age(panel: pd.DataFrame) -> pd.DataFrame:
     """Add `volume_trend`, `price` and `firm_age` (OSAP's code, published sign -1 each).
 
@@ -276,8 +282,7 @@ def add_trend_price_age(panel: pd.DataFrame) -> pd.DataFrame:
     mean = volume.rolling(VOLTREND_MONTHS, min_periods=VOLTREND_MIN).mean()
     trend = slope / mean.where(mean > 0)
 
-    month = panel["month_end"].dt.year * 12 + panel["month_end"].dt.month
-    age = month - month.groupby(panel["permaticker"]).transform("min") + 1
+    age = _months_listed(panel)
 
     return panel.assign(
         volume_trend=_at_rows(trend, panel, volume),
@@ -457,6 +462,89 @@ def add_valuation_ratios(panel: pd.DataFrame) -> pd.DataFrame:
         ep=(earnings / mcap).where(earnings >= 0),
         cash_prod=(mcap - assets) / cash.where(cash > 0),
         ent_mult=ent_mult.where((ebitda >= 0) & (panel["equity"] >= 0)),
+    )
+
+
+# OSAP rules for the book, payout and debt ratios.
+PAYOUT_LAG = 6  # payout yields: over market cap 6 months earlier
+MIN_HISTORY = 24  # payout yields: from a stock's 24th month in the data
+BMDEC_SWITCH = 6  # BMdec: from June, last December's market cap; before, the one before
+NET_DEBT_MIN_BM = 0.4  # NetDebtPrice: only above the 40th percentile of log B/M (top 3 fifths)
+
+
+def _financial(panel: pd.DataFrame) -> pd.Series:
+    """Banks, insurers, etc. (SIC 6000-6999), by today's SIC code (see data.real.add_sic_code)."""
+    return panel["sic_code"].between(6000, 6999)
+
+
+def add_book_payout_debt_ratios(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `bm_dec`, `payout_yield`, `net_payout_yield`, `net_debt_price`, `ebm`, `bpebm`.
+
+    OSAP's code, on the latest public filing (USD, `_usd`); signs in run.PUBLISHED_SIGN.
+    - `bm_dec`: book equity over the market cap of last December, or of the December
+      before from January to May (BMdec; Fama & French 1992 timing).
+    - `payout_yield`: (dividends paid + net share buybacks) over market cap 6 months
+      earlier; NaN if <= 0 (PayoutYield; Boudoukh et al. 2007).
+    - `net_payout_yield`: (dividends paid - net equity issued) over market cap 6
+      months earlier; NaN if 0 (NetPayoutYield; Boudoukh et al. 2007).
+      Sharadar reports equity issuance net of buybacks (`ncfcommon`), so gross
+      buybacks are approximated by net ones; preferred stock terms are left out.
+      Both: financials excluded, book equity > 0 (payout_yield: or missing), and
+      only from the stock's `MIN_HISTORY`th month in the data.
+    - `net_debt_price`: (debt - cash) over market cap, financials excluded, only
+      for stocks above the month's 40th percentile of log book-to-market
+      (NetDebtPrice; Penman, Richardson & Tuna 2007).
+    - `ebm`: (book + cash - debt) over (market cap + cash - debt): book-to-market
+      of the operating business (EBM; Penman et al. 2007).
+    - `bpebm`: book-to-price minus `ebm`, the leverage part of B/M (BPEBM).
+    OSAP's preferred-stock and treasury-stock adjustments are left out.
+    Financials use today's SIC code (approximate). Past market caps are this
+    stock's own earlier rows, all public by month_end: no look-ahead.
+    """
+    panel = _sorted_by_stock(panel)
+    mcap = panel["market_cap"].where(panel["market_cap"] > 0)
+    book, cash, debt = _usd(panel, "equity"), _usd(panel, "cashneq"), _usd(panel, "debt")
+    dividends = -_usd(panel, "ncfdiv")  # cash-flow outflows are negative
+    net_issued = _usd(panel, "ncfcommon")
+    financial = _financial(panel)
+    seasoned = _months_listed(panel) >= MIN_HISTORY
+
+    caps = _calendar_grid(panel, "market_cap")
+    lagged = _at_rows(caps.shift(PAYOUT_LAG), panel, caps)
+    lagged = pd.Series(lagged, index=panel.index).where(lambda s: s > 0)
+    payout = (dividends + (-net_issued).clip(lower=0)) / lagged
+    payout = payout.where((payout > 0) & ~financial & seasoned & ~(book <= 0))
+    net_payout = (dividends - net_issued) / lagged
+    net_payout = net_payout.where((net_payout != 0) & ~financial & seasoned & (book > 0))
+
+    month = panel["month_end"].dt.month
+    dec_year = panel["month_end"].dt.year - np.where(month >= BMDEC_SWITCH, 1, 2)
+    december = panel.loc[month == 12, ["permaticker", "month_end", "market_cap"]]
+    december = pd.DataFrame(
+        {
+            "permaticker": december["permaticker"],
+            "dec_year": december["month_end"].dt.year,
+            "dec_cap": december["market_cap"],
+        }
+    )
+    keyed = pd.DataFrame({"permaticker": panel["permaticker"], "dec_year": dec_year})
+    dec_cap = keyed.merge(december, on=["permaticker", "dec_year"], how="left")["dec_cap"]
+    dec_cap = pd.Series(dec_cap.to_numpy(), index=panel.index).where(lambda s: s > 0)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        log_bm = np.log(book / mcap).replace([np.inf, -np.inf], np.nan)
+    cut = log_bm.groupby(panel["month_end"]).transform("quantile", NET_DEBT_MIN_BM)
+    complete = panel[["assets", "netinc", "equity"]].notna().all(axis=1)
+    net_debt = ((debt - cash) / mcap).where(~financial & complete & (log_bm > cut))
+
+    ebm = (book + cash - debt) / (mcap + cash - debt)
+    return panel.assign(
+        bm_dec=book / dec_cap,
+        payout_yield=payout,
+        net_payout_yield=net_payout,
+        net_debt_price=net_debt,
+        ebm=ebm,
+        bpebm=book / mcap - ebm,
     )
 
 

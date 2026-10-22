@@ -78,6 +78,13 @@ FEATURE_ACRONYMS = {
     "ep": "EP",
     "cash_prod": "CashProd",
     "ent_mult": "EntMult",
+    # Step 55: book, payout and net debt ratios
+    "bm_dec": "BMdec",
+    "payout_yield": "PayoutYield",
+    "net_payout_yield": "NetPayoutYield",
+    "net_debt_price": "NetDebtPrice",
+    "ebm": "EBM",
+    "bpebm": "BPEBM",
 }
 
 

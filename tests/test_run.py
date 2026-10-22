@@ -49,7 +49,9 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["fxusd"] = 1.0
     panel["equity"] = panel["equityusd"]
     panel["liabilities"] = panel["assets"] - panel["equity"]
-    for col in ["revenue", "netinc", "depamor", "ncfo", "rnd", "cashneq", "debt", "ebitda"]:
+    panel["sic_code"] = rng.choice([3571.0, 6022.0], len(panel))
+    cols = ["revenue", "netinc", "depamor", "ncfo", "rnd", "cashneq", "debt", "ebitda"]
+    for col in [*cols, "ncfdiv", "ncfcommon"]:
         panel[col] = panel["assets"] * rng.normal(0.1, 0.1, len(panel))
     panel["n_days"] = 21
     panel["dret_sum"] = rng.normal(0, 0.05, len(panel))
@@ -86,7 +88,8 @@ def test_prepare_computes_features_before_dropping_uninvestable_rows():
 
 
 def test_evaluate_scores_each_model_the_right_way():
-    table = evaluate(prepare(make_panel()), baseline_models(), min_train=12)
+    panel = prepare(make_panel())
+    table = evaluate(panel, baseline_models(), min_train=12)
     table = table.set_index("model")
     assert list(table.index) == [
         "zero",
@@ -110,10 +113,18 @@ def test_evaluate_scores_each_model_the_right_way():
     empty = table.loc[signals, "n_forecasts"] == 0
     assert set(empty[empty].index) <= {f"signal_{c}" for c in long_lags}
     assert table.loc[empty[empty].index, "mean_ic"].isna().all()
-    # mom_rev is set only for extreme stocks: too few per month for an IC here; every
-    # toy stock starts in the same month, so firm_age is a constant: nothing to rank.
-    scored = empty[~empty].index.drop(["signal_mom_rev", "signal_firm_age"])
-    assert table.loc[scored, "ic_months"].gt(0).all()
+    # Every signal with a rankable month (>= 10 stocks with a forecast and a return,
+    # not all equal) in the test period gets an IC. Some are too sparse on 15 toy
+    # stocks (e.g. net_debt_price) or constant (firm_age: all start together).
+    tested = panel[panel["month_end"] >= MONTHS[12]].dropna(subset=["fwd_ret"])
+    by_month = tested.groupby("month_end")
+    rankable = [
+        f"signal_{c}"
+        for c in RAW_FEATURES
+        if ((by_month[c].count() >= 10) & (by_month[c].nunique() > 1)).any()
+    ]
+    assert len(rankable) > 30
+    assert table.loc[rankable, "ic_months"].gt(0).all()
     # Learned models forecast returns AND order stocks: both metrics.
     assert (
         table.loc[["ols", "ridge", "enet", "lgbm"], ["oos_r2_pct", "mean_ic"]].notna().all().all()
@@ -150,7 +161,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 41
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 47
 
 
 def test_prepare_ranks_among_investable_stocks_only():

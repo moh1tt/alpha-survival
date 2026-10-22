@@ -22,6 +22,7 @@ def raw_tickers(**overrides):
             "lastpricedate": pd.to_datetime(
                 ["2026-10-12", "2026-10-12", "2009-03-31", "2009-03-31"]
             ),
+            "siccode": [3571.0, 3571.0, 6022.0, 6022.0],
         }
     )
     for col, values in overrides.items():
@@ -53,6 +54,17 @@ def test_delisted_stocks_are_kept_as_booleans():
 def test_output_uses_our_column_names():
     master = real.build_security_master(raw_tickers())
     assert list(master.columns) == list(real.SECURITY_MASTER_COLUMNS.values())
+
+
+def test_sic_code_joins_each_stock_its_own_code():
+    master = real.build_security_master(raw_tickers())
+    panel = pd.DataFrame(
+        {"permaticker": [101, 202, 202, 303], "month_end": pd.to_datetime(["2020-01-31"] * 4)}
+    )
+    out = real.add_sic_code(panel, master)
+    assert out["sic_code"].iloc[:3].tolist() == [3571.0, 6022.0, 6022.0]
+    assert np.isnan(out["sic_code"].iloc[3])  # not in the master
+    assert len(out) == len(panel)
 
 
 def test_duplicate_permaticker_raises():
