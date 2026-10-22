@@ -141,7 +141,7 @@ def test_portfolio_table_covers_ols_and_every_signal_both_weightings():
     run_all(panel, keep=forecasts, min_train=12)
     table = portfolio_table(forecasts, panel)
     assert set(PUBLISHED_SIGN) == set(RAW_FEATURES)  # every feature has a published sign
-    assert set(table["portfolio"]) == {"ols", "enet", "lgbm"} | {
+    assert set(table["portfolio"]) == {"ols", "enet", "lgbm", "combo"} | {
         f"signal_{c}" for c in RAW_FEATURES
     }
     assert (table.groupby("portfolio")["weighting"].apply(set) == {"equal", "value"}).all()
@@ -186,9 +186,9 @@ def test_selection_table_deflates_every_portfolio_by_the_honest_trial_count():
     forecasts, net = {}, {}
     run_all(panel, keep=forecasts, min_train=12)
     portfolio_table(forecasts, panel, keep_net=net)
-    assert len(net) == 40  # 10 portfolios x 2 weightings x 2 leg rules
+    assert len(net) == 44  # 11 portfolios x 2 weightings x 2 leg rules
     table = selection_table(net)
-    honest = f"dsr_n{40 + UNREPORTED_TRIALS}"
+    honest = f"dsr_n{44 + UNREPORTED_TRIALS}"
     assert list(table.columns) == [
         "portfolio",
         "weighting",
@@ -206,7 +206,7 @@ def test_selection_table_deflates_every_portfolio_by_the_honest_trial_count():
     probs = table[["psr", "dsr_n10", honest, "dsr_n50"]]
     assert ((probs >= 0) & (probs <= 1)).all().all()
     report = render_selection(table, net)
-    assert "deflated Sharpe" in report and f"Trials: {40 + UNREPORTED_TRIALS}" in report
+    assert "deflated Sharpe" in report and f"Trials: {44 + UNREPORTED_TRIALS}" in report
 
 
 def test_selection_table_sharpe_matches_the_net_table():
@@ -238,3 +238,13 @@ def test_penalty_table_reports_each_enet_fold():
     text = render_penalties(table)
     assert "real data" in text.lower() and "| alpha |" in text
     assert f"of {len(table)} refits kept no feature" in text
+
+
+def test_run_all_adds_the_combination_scored_as_a_rank():
+    panel = prepare(make_panel())
+    forecasts = {}
+    table = run_all(panel, keep=forecasts, min_train=12).set_index(["model", "window"])
+    combo = table.loc[("combo", "expanding")]
+    assert np.isnan(combo["oos_r2_pct"]) and np.isfinite(combo["mean_ic"])
+    assert len(forecasts["combo"]) == len(forecasts["lgbm"])
+    assert forecasts["combo"]["pred"].between(-1, 1).all()

@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression, Ridge
 
+from alpha_survival.combine import rank_average
 from alpha_survival.data.quality import markdown_table
 from alpha_survival.data.real import load_panel
 from alpha_survival.features import (
@@ -90,6 +91,10 @@ SPREAD_ERA_LABELS = ["1997-2000", "2001-2008", "2009-2015", "2016-2026"]
 UNREPORTED_TRIALS = 4
 # Trial counts to show the deflated Sharpe ratio at, besides the honest count.
 SENSITIVITY_TRIALS = (10, 50)
+# Equal-weight rank combination of the learned models, members fixed before seeing
+# how the combination does.
+COMBO = "combo"
+COMBO_MEMBERS = ["ols", "enet", "lgbm"]
 
 
 def baseline_models() -> list[Forecaster]:
@@ -151,37 +156,41 @@ def evaluate(
             keep[model.name] = oos
         if fitted is not None:
             fitted[model.name] = folds
-        scored = oos.dropna(subset=["fwd_ret", "pred"])
-        window = split_kwargs.get("window")
-        row = {
-            "model": model.name,
-            "window": "expanding" if window is None else f"rolling {window}m",
-            "first_test_month": oos["month_end"].min().date(),
-            "last_test_month": oos["month_end"].max().date(),
-            "n_forecasts": len(scored),
-            "oos_r2_pct": float("nan"),
-            "mean_ic": float("nan"),
-            "ic_t_stat": float("nan"),
-            "ic_nw_t_stat": float("nan"),
-            "ic_autocorr_1": float("nan"),
-            "ic_hit_rate": float("nan"),
-            "ic_months": 0,
-        }
-        if not isinstance(model, SignalForecast):
-            row["oos_r2_pct"] = 100 * oos_r2(oos)
-        ic = rank_ic(oos)
-        if len(ic) >= 2:
-            s = ic_summary(ic)
-            row |= {
-                "mean_ic": s["mean_ic"],
-                "ic_t_stat": s["t_stat"],
-                "ic_nw_t_stat": s["nw_t_stat"],
-                "ic_autocorr_1": s["ic_autocorr_1"],
-                "ic_hit_rate": s["hit_rate"],
-                "ic_months": s["n_months"],
-            }
-        rows.append(row)
+        is_return = not isinstance(model, SignalForecast)
+        rows.append(score(oos, model.name, split_kwargs.get("window"), is_return))
     return pd.DataFrame(rows)
+
+
+def score(oos: pd.DataFrame, name: str, window: int | None, is_return: bool) -> dict:
+    """The out-of-sample scores of one set of forecasts (see `evaluate`)."""
+    row = {
+        "model": name,
+        "window": "expanding" if window is None else f"rolling {window}m",
+        "first_test_month": oos["month_end"].min().date(),
+        "last_test_month": oos["month_end"].max().date(),
+        "n_forecasts": len(oos.dropna(subset=["fwd_ret", "pred"])),
+        "oos_r2_pct": float("nan"),
+        "mean_ic": float("nan"),
+        "ic_t_stat": float("nan"),
+        "ic_nw_t_stat": float("nan"),
+        "ic_autocorr_1": float("nan"),
+        "ic_hit_rate": float("nan"),
+        "ic_months": 0,
+    }
+    if is_return:
+        row["oos_r2_pct"] = 100 * oos_r2(oos)
+    ic = rank_ic(oos)
+    if len(ic) >= 2:
+        s = ic_summary(ic)
+        row |= {
+            "mean_ic": s["mean_ic"],
+            "ic_t_stat": s["t_stat"],
+            "ic_nw_t_stat": s["nw_t_stat"],
+            "ic_autocorr_1": s["ic_autocorr_1"],
+            "ic_hit_rate": s["hit_rate"],
+            "ic_months": s["n_months"],
+        }
+    return row
 
 
 def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
@@ -224,6 +233,9 @@ def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
             "trees, fixed untuned settings: "
             "depth 4, 200 trees, learning rate 0.05, each leaf >= 0.1% of training rows) "
             "on the same seven, so it can pick up nonlinear effects and interactions.",
+            "- `combo`: each month, the forecasts of `ols`, `enet` and `lgbm` ranked to "
+            "[-1, 1] and averaged with equal weights (fixed in advance, nothing fit). A rank "
+            "score, not a return, so no R^2.",
             "- Splits: first 60 months train only, 12-month test blocks, model refit at the "
             "start of each block, horizon 1, embargo 0. `window`: `expanding` trains on all "
             f"months so far; `rolling {ROLLING_WINDOW}m` on the latest {ROLLING_WINDOW} only. "
@@ -250,14 +262,18 @@ def run_all(
     fitted: dict[str, list[Forecaster]] | None = None,
     **split_kwargs,
 ) -> pd.DataFrame:
-    """Every model with an expanding window, then the learning ones with a rolling one.
+    """Every model with an expanding window, their combination, then the learning
+    ones with a rolling window.
 
     `keep` collects the expanding-window forecasts by model name (for portfolios),
-    `fitted` the expanding-window per-fold fitted models.
+    combination included; `fitted` the expanding-window per-fold fitted models.
     """
+    keep = {} if keep is None else keep
     expanding = evaluate(panel, baseline_models(), keep=keep, fitted=fitted, **split_kwargs)
+    keep[COMBO] = rank_average(keep, COMBO_MEMBERS)
+    combo = score(keep[COMBO], COMBO, None, is_return=False)
     rolling = evaluate(panel, rolling_models(), window=ROLLING_WINDOW, **split_kwargs)
-    return pd.concat([expanding, rolling], ignore_index=True)
+    return pd.concat([expanding, pd.DataFrame([combo]), rolling], ignore_index=True)
 
 
 def penalty_table(folds: list[ElasticNetForecaster], oos: pd.DataFrame) -> pd.DataFrame:
@@ -310,7 +326,7 @@ def render_penalties(table: pd.DataFrame) -> str:
 
 
 # Models whose forecasts carry the directions they learned in training.
-LEARNED = {"ols", "enet", "lgbm"}
+LEARNED = {"ols", "enet", "lgbm", COMBO}
 # How legs are formed: plain deciles every month, or a holding band (enter in the
 # top/bottom decile, sell once out of the top/bottom EXIT_GROUPS deciles).
 LEG_RULES = {"decile": None, "band": EXIT_GROUPS}
@@ -335,7 +351,7 @@ def portfolio_table(
     """
     caps = panel[["permaticker", "month_end", "market_cap"]]
     spread = estimated_spread_bps(panel).set_index(["permaticker", "month_end"])["cost_bps"]
-    candidates = [("ols", 1), ("enet", 1), ("lgbm", 1)] + [
+    candidates = [("ols", 1), ("enet", 1), ("lgbm", 1), (COMBO, 1)] + [
         (f"signal_{c}", sign) for c, sign in PUBLISHED_SIGN.items()
     ]
     rows = []
@@ -416,8 +432,8 @@ def render_portfolios(table: pd.DataFrame) -> str:
             "- Each month: long the top 10% of stocks by forecast, short the bottom 10%, hold "
             "one month. Return = long leg - short leg (the short funds the long).",
             "- `direction`: signals trade the sign their original paper published (`high` = "
-            "buy high values), never the sign seen in our test period; `ols`, `enet` and "
-            "`lgbm` use the signs they learned in each training window.",
+            "buy high values), never the sign seen in our test period; `ols`, `enet`, "
+            "`lgbm` and `combo` use the signs they learned in each training window.",
             "- `equal`: every stock the same weight; `value`: weighted by market cap at "
             "formation. A big gap means the edge lives in small, costly-to-trade stocks.",
             "- `legs`: `decile` re-forms both legs from scratch each month; `band` buys "

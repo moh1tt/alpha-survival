@@ -4,6 +4,7 @@
 
 - Panel: investable rows (price >= $5 at month end), 1997-12 to 2026-09, 1,362,457 stock-months, 16,118 stocks.
 - Models: `zero` and `hist_mean` (pooled training mean) baselines; raw signals `mom_12_1` (12-1 momentum), `log_mcap` (log size) and `bm` (book-to-market: latest filed USD book equity / month-end market cap, NaN if book <= 0) and `rev_1m` (this month's return, short-term reversal; expect a NEGATIVE IC) and `gp_a` (gross profit / total assets, NaN where cost of revenue is 0) and `asset_growth` (assets vs. 12 months earlier; expect a NEGATIVE IC) and `vol_3m` (std of daily returns over the last 3 months; expect a NEGATIVE IC); `ols` and `ridge` (alpha=1, untuned) on all seven rank-normalised to [-1, 1] each month; `enet` (ElasticNet, half Lasso half Ridge penalty, its strength picked from 1e-5 to 0.1 by MSE on the latest 20% of each training window, then refit on the whole window) on the same seven; `lgbm` (LightGBM gradient-boosted trees, fixed untuned settings: depth 4, 200 trees, learning rate 0.05, each leaf >= 0.1% of training rows) on the same seven, so it can pick up nonlinear effects and interactions.
+- `combo`: each month, the forecasts of `ols`, `enet` and `lgbm` ranked to [-1, 1] and averaged with equal weights (fixed in advance, nothing fit). A rank score, not a return, so no R^2.
 - Splits: first 60 months train only, 12-month test blocks, model refit at the start of each block, horizon 1, embargo 0. `window`: `expanding` trains on all months so far; `rolling 60m` on the latest 60 only. Both start testing in the same month.
 - `oos_r2_pct`: pooled R^2 vs. a zero forecast, in percent (Gu, Kelly & Xiu 2020). Blank for raw signals, whose scale is not a return.
 - `mean_ic`: average monthly Spearman rank correlation of forecast with next-month return; months with < 10 stocks skipped. Blank for constant forecasts. `signal_log_mcap` is log size, so a small-firm premium shows as a NEGATIVE IC.
@@ -24,6 +25,7 @@
 | ridge | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.128 | 0.0314 | 5.33 | 5.21 | 0.04 | 0.681 | 285 |
 | enet | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.145 | 0.0258 | 3.04 | 3.19 | -0.01 | 0.642 | 201 |
 | lgbm | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.182 | 0.0306 | 7.03 | 7.25 | -0.04 | 0.681 | 285 |
+| combo | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 |  | 0.0333 | 6.07 | 5.67 | 0.06 | 0.695 | 285 |
 | hist_mean | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.192 |  |  |  |  |  | 0 |
 | ols | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.325 | 0.0248 | 3.96 | 4.13 | 0.01 | 0.600 | 285 |
 
@@ -67,7 +69,7 @@
 **Real data, out-of-sample. No trading or borrowing costs yet: an upper bound, not achievable returns.**
 
 - Each month: long the top 10% of stocks by forecast, short the bottom 10%, hold one month. Return = long leg - short leg (the short funds the long).
-- `direction`: signals trade the sign their original paper published (`high` = buy high values), never the sign seen in our test period; `ols`, `enet` and `lgbm` use the signs they learned in each training window.
+- `direction`: signals trade the sign their original paper published (`high` = buy high values), never the sign seen in our test period; `ols`, `enet`, `lgbm` and `combo` use the signs they learned in each training window.
 - `equal`: every stock the same weight; `value`: weighted by market cap at formation. A big gap means the edge lives in small, costly-to-trade stocks.
 - `legs`: `decile` re-forms both legs from scratch each month; `band` buys into the top (bottom) 10% but only sells once a stock leaves the top (bottom) 20%, so names near the cut-off stop flipping in and out (buy/hold spread, Novy-Marx & Velikov 2016). Band fixed in advance, not tuned.
 - `ann_return` = 12 x mean monthly; `sharpe` = mean / std x sqrt(12); `nw_t_stat` of the mean monthly return; `max_drawdown` of $1 compounded.
@@ -86,6 +88,10 @@
 | lgbm | learned | equal | band | 0.1398 | 0.1143 | 1.22 | 4.79 | -0.275 | 0.698 | 285 | 466 |
 | lgbm | learned | value | decile | 0.0824 | 0.2279 | 0.36 | 1.63 | -0.597 | 0.589 | 285 | 353 |
 | lgbm | learned | value | band | 0.0871 | 0.2089 | 0.42 | 1.88 | -0.434 | 0.561 | 285 | 441 |
+| combo | learned | equal | decile | 0.1439 | 0.1524 | 0.94 | 4.07 | -0.444 | 0.670 | 285 | 370 |
+| combo | learned | equal | band | 0.1167 | 0.1399 | 0.83 | 3.55 | -0.407 | 0.653 | 285 | 478 |
+| combo | learned | value | decile | 0.0607 | 0.1948 | 0.31 | 1.42 | -0.581 | 0.568 | 285 | 363 |
+| combo | learned | value | band | 0.0584 | 0.1723 | 0.34 | 1.58 | -0.409 | 0.551 | 285 | 469 |
 | signal_mom_12_1 | high | equal | decile | 0.0744 | 0.1838 | 0.40 | 1.90 | -0.658 | 0.625 | 285 | 343 |
 | signal_mom_12_1 | high | equal | band | 0.0621 | 0.1658 | 0.37 | 1.74 | -0.615 | 0.607 | 285 | 448 |
 | signal_mom_12_1 | high | value | decile | 0.1053 | 0.2664 | 0.40 | 2.00 | -0.596 | 0.596 | 285 | 336 |
@@ -138,6 +144,10 @@
 | lgbm | learned | equal | band | 1.46 | 1.22 | 1.03 | 0.87 | 0.41 | 49 | 0.41 | 77 |
 | lgbm | learned | value | decile | 2.25 | 0.36 | 0.22 | 0.10 | -0.25 | 21 | 0.09 | 29 |
 | lgbm | learned | value | band | 1.48 | 0.42 | 0.31 | 0.22 | -0.03 | 21 | 0.21 | 46 |
+| combo | learned | equal | decile | 1.89 | 0.94 | 0.76 | 0.61 | 0.17 | 42 | 0.28 | 61 |
+| combo | learned | equal | band | 1.23 | 0.83 | 0.69 | 0.59 | 0.27 | 43 | 0.34 | 76 |
+| combo | learned | value | decile | 2.28 | 0.31 | 0.15 | 0.01 | -0.41 | 18 | 0.03 | 20 |
+| combo | learned | value | band | 1.32 | 0.34 | 0.22 | 0.13 | -0.15 | 19 | 0.14 | 34 |
 | signal_mom_12_1 | high | equal | decile | 1.34 | 0.40 | 0.29 | 0.20 | -0.06 | 42 | 0.01 | 43 |
 | signal_mom_12_1 | high | equal | band | 0.88 | 0.37 | 0.28 | 0.22 | 0.03 | 44 | 0.06 | 54 |
 | signal_mom_12_1 | high | value | decile | 1.50 | 0.40 | 0.31 | 0.24 | 0.04 | 19 | 0.25 | 56 |
@@ -171,29 +181,33 @@
 
 **Real data, out-of-sample, net of estimated costs. Asks whether the best portfolio beats what luck alone would give the best of many tries.**
 
-- Trials: 44 = the 40 portfolios above plus 4 variants tried but not built (ridge and rolling-window OLS, each equal- or value-weighted). Every portfolio counts twice, plain and banded: the band is a second try at the same idea. Every row is judged against the same bar, since any of them could have been the one we picked.
-- Luck bar: with 44 skill-less trials whose Sharpes spread as ours do (std 0.41 annualised), the best would show a Sharpe of about 0.91 by chance (Bailey & Lopez de Prado 2014).
-- `psr`: probability the true Sharpe is above 0, allowing for skew and fat tails (Bailey & Lopez de Prado 2012). `dsr_nN`: probability it is above the luck bar for N trials. `dsr_n44` is the honest count; the others show how much the verdict depends on N. Above 0.95: survives selection.
+- Trials: 48 = the 44 portfolios above plus 4 variants tried but not built (ridge and rolling-window OLS, each equal- or value-weighted). Every portfolio counts twice, plain and banded: the band is a second try at the same idea. Every row is judged against the same bar, since any of them could have been the one we picked.
+- Luck bar: with 48 skill-less trials whose Sharpes spread as ours do (std 0.40 annualised), the best would show a Sharpe of about 0.91 by chance (Bailey & Lopez de Prado 2014).
+- `psr`: probability the true Sharpe is above 0, allowing for skew and fat tails (Bailey & Lopez de Prado 2012). `dsr_nN`: probability it is above the luck bar for N trials. `dsr_n48` is the honest count; the others show how much the verdict depends on N. Above 0.95: survives selection.
 
-| portfolio | weighting | legs | sharpe_net_est | psr | dsr_n10 | dsr_n44 | dsr_n50 |
+| portfolio | weighting | legs | sharpe_net_est | psr | dsr_n10 | dsr_n48 | dsr_n50 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| signal_gp_a | value | decile | 0.58 | 0.998 | 0.382 | 0.053 | 0.043 |
-| signal_gp_a | equal | decile | 0.56 | 0.997 | 0.333 | 0.040 | 0.032 |
-| signal_gp_a | value | band | 0.55 | 0.997 | 0.318 | 0.035 | 0.028 |
-| signal_gp_a | equal | band | 0.53 | 0.996 | 0.287 | 0.029 | 0.023 |
-| lgbm | equal | band | 0.41 | 0.974 | 0.137 | 0.009 | 0.007 |
-| lgbm | equal | decile | 0.26 | 0.893 | 0.035 | 0.001 | 0.001 |
-| signal_mom_12_1 | value | decile | 0.25 | 0.881 | 0.030 | 0.001 | 0.001 |
-| ols | equal | band | 0.22 | 0.844 | 0.022 | 0.001 | 0.000 |
-| lgbm | value | band | 0.21 | 0.849 | 0.016 | 0.000 | 0.000 |
-| signal_mom_12_1 | value | band | 0.19 | 0.817 | 0.015 | 0.000 | 0.000 |
-| ols | equal | decile | 0.13 | 0.731 | 0.007 | 0.000 | 0.000 |
-| lgbm | value | decile | 0.09 | 0.670 | 0.003 | 0.000 | 0.000 |
-| ols | value | band | 0.08 | 0.644 | 0.003 | 0.000 | 0.000 |
+| signal_gp_a | value | decile | 0.58 | 0.998 | 0.406 | 0.056 | 0.052 |
+| signal_gp_a | equal | decile | 0.56 | 0.997 | 0.356 | 0.042 | 0.039 |
+| signal_gp_a | value | band | 0.55 | 0.997 | 0.341 | 0.037 | 0.034 |
+| signal_gp_a | equal | band | 0.53 | 0.996 | 0.309 | 0.031 | 0.029 |
+| lgbm | equal | band | 0.41 | 0.974 | 0.150 | 0.010 | 0.009 |
+| combo | equal | band | 0.34 | 0.942 | 0.087 | 0.004 | 0.004 |
+| combo | equal | decile | 0.28 | 0.905 | 0.053 | 0.002 | 0.002 |
+| lgbm | equal | decile | 0.26 | 0.893 | 0.040 | 0.001 | 0.001 |
+| signal_mom_12_1 | value | decile | 0.25 | 0.881 | 0.034 | 0.001 | 0.001 |
+| ols | equal | band | 0.22 | 0.844 | 0.026 | 0.001 | 0.001 |
+| lgbm | value | band | 0.21 | 0.849 | 0.019 | 0.000 | 0.000 |
+| signal_mom_12_1 | value | band | 0.19 | 0.817 | 0.017 | 0.000 | 0.000 |
+| combo | value | band | 0.14 | 0.744 | 0.008 | 0.000 | 0.000 |
+| ols | equal | decile | 0.13 | 0.731 | 0.009 | 0.000 | 0.000 |
+| lgbm | value | decile | 0.09 | 0.670 | 0.004 | 0.000 | 0.000 |
+| ols | value | band | 0.08 | 0.644 | 0.004 | 0.000 | 0.000 |
 | signal_mom_12_1 | equal | band | 0.06 | 0.620 | 0.003 | 0.000 | 0.000 |
-| ols | value | decile | 0.03 | 0.557 | 0.001 | 0.000 | 0.000 |
+| combo | value | decile | 0.03 | 0.561 | 0.002 | 0.000 | 0.000 |
+| ols | value | decile | 0.03 | 0.557 | 0.002 | 0.000 | 0.000 |
 | signal_mom_12_1 | equal | decile | 0.01 | 0.516 | 0.001 | 0.000 | 0.000 |
-| enet | value | band | 0.00 | 0.502 | 0.004 | 0.000 | 0.000 |
+| enet | value | band | 0.00 | 0.502 | 0.005 | 0.000 | 0.000 |
 | enet | value | decile | -0.02 | 0.459 | 0.003 | 0.000 | 0.000 |
 | signal_bm | equal | band | -0.06 | 0.382 | 0.000 | 0.000 | 0.000 |
 | signal_vol_3m | value | decile | -0.08 | 0.341 | 0.000 | 0.000 | 0.000 |
