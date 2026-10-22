@@ -256,9 +256,13 @@ def net_returns(long_short: pd.Series, trading_cost: pd.Series, borrow_bps_pa: f
     Each month pays its `trading_cost` (from `trading_costs`) at formation plus
     1/12 of the annual fee for borrowing the $1 of shorted stock. Both series are
     indexed by formation month: the trade at month_end t buys the return earned
-    over t+1.
+    over t+1. A month with no trades (e.g. a `no_view_months` month, which earns 0)
+    costs 0 to trade, so it stays in the series as it does in the gross one;
+    dropping it would flatter the net Sharpe. The borrow fee is charged every month,
+    even with nothing shorted: slightly conservative.
     """
-    return long_short - trading_cost.reindex(long_short.index) - borrow_bps_pa / 1e4 / 12
+    cost = trading_cost.reindex(long_short.index, fill_value=0.0).fillna(0.0)
+    return long_short - cost - borrow_bps_pa / 1e4 / 12
 
 
 def breakeven_cost_bps(long_short: pd.Series, turnover: pd.Series, borrow_bps_pa: float) -> float:
@@ -267,7 +271,7 @@ def breakeven_cost_bps(long_short: pd.Series, turnover: pd.Series, borrow_bps_pa
     Above this, the strategy loses money on average. NaN if it never trades;
     negative if the borrow fee alone already wipes out the gross return.
     """
-    avg_turnover = float(turnover.reindex(long_short.index).mean())
+    avg_turnover = float(turnover.reindex(long_short.index, fill_value=0.0).fillna(0.0).mean())
     if avg_turnover == 0:
         return float("nan")
     return (float(long_short.mean()) - borrow_bps_pa / 1e4 / 12) / avg_turnover * 1e4

@@ -406,3 +406,15 @@ def test_banded_legs_restart_after_a_no_view_month():
     legs = banded_legs([jan, feb, mar])
     assert legs[pd.Timestamp("2020-02-29")] == (set(), set())
     assert legs[pd.Timestamp("2020-03-31")] == ({"S0"}, {"S9"})
+
+
+def test_months_without_trades_stay_in_the_net_series_at_zero_cost():
+    # A no-view month earns 0 gross and trades nothing. It must count in the net
+    # series too, or net and gross Sharpe would cover different months.
+    months = pd.date_range("2020-01-31", periods=3, freq="ME")
+    gross = pd.Series([0.0, 0.02, 0.01], index=months)
+    cost = pd.Series([0.001, 0.001], index=months[1:])
+    net = net_returns(gross, cost, 0)
+    assert net.tolist() == pytest.approx([0.0, 0.019, 0.009])
+    turnover = pd.Series([2.0, 2.0], index=months[1:])
+    assert breakeven_cost_bps(gross, turnover, 0) == pytest.approx(0.01 / (4 / 3) * 1e4)
