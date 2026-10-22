@@ -570,17 +570,17 @@ def _months_ago(panel: pd.DataFrame, values: str | pd.Series, months: int) -> pd
     return pd.Series(_at_rows(grid.shift(months), keys, grid), index=panel.index)
 
 
-def _own_rolling_mean(
-    panel: pd.DataFrame, values: pd.Series, window: int, min_periods: int
+def _own_rolling(
+    panel: pd.DataFrame, values: pd.Series, window: int, min_periods: int, stat: str = "mean"
 ) -> pd.Series:
-    """Mean of `values` over each stock's last `window` calendar months (this one
-    included), NaN with fewer than `min_periods` values."""
+    """`stat` ("mean", "std", "sum") of `values` over each stock's last `window`
+    calendar months (this one included), NaN with fewer than `min_periods` values."""
     keys = pd.DataFrame(
         {"permaticker": panel["permaticker"], "month_end": panel["month_end"], "v": values}
     )
     grid = _calendar_grid(keys, "v")
-    mean = grid.rolling(window, min_periods=min_periods).mean()
-    return pd.Series(_at_rows(mean, keys, grid), index=panel.index)
+    result = getattr(grid.rolling(window, min_periods=min_periods), stat)()
+    return pd.Series(_at_rows(result, keys, grid), index=panel.index)
 
 
 TAX_RATE = 0.35  # Tax: OSAP's top statutory rate from 1993 (kept after 2018's cut to 21%)
@@ -866,7 +866,7 @@ def add_investment_growth(panel: pd.DataFrame) -> pd.DataFrame:
     revenue = panel["revenue"]
     capex = -panel["capex"]
     ratio = capex / revenue.where(revenue != 0)
-    ratio_mean = _own_rolling_mean(panel, ratio, INVESTMENT_MONTHS, INVESTMENT_MIN)
+    ratio_mean = _own_rolling(panel, ratio, INVESTMENT_MONTHS, INVESTMENT_MIN)
     investment = (ratio / ratio_mean.where(ratio_mean != 0)).where(
         revenue >= INVESTMENT_MIN_REVENUE
     )
@@ -981,6 +981,101 @@ def add_financing_signals(panel: pd.DataFrame) -> pd.DataFrame:
         xfin=(equity_flow + net_debt) / assets,
         **share_issues,
         share_repurchase=(net_equity < 0).astype(float).where(net_equity.notna()),
+    )
+
+
+SHAREVOL_MONTHS = 3  # ShareVol: average turnover over this month and the 2 before
+SHAREVOL_LOW, SHAREVOL_HIGH = 5.0, 10.0  # ShareVol: % monthly turnover cut-offs
+VOLMKT_MONTHS, VOLMKT_MIN = 12, 10  # VolMkt: mean dollar volume, >= 10 of 12 months
+STDTURN_MONTHS, STDTURN_MIN = 36, 24  # std_turn: std of turnover, >= 24 of 36 months
+STDTURN_LARGE = 0.6  # std_turn: drop the month's two largest fifths by market cap
+# zerotrade: Liu (2006)'s deflators (fn 4), large enough that the turnover term only
+# breaks ties between stocks with the same count of zero-volume days.
+ZEROTRADE = {
+    "zerotrade_1m": (1, 480_000),
+    "zerotrade_6m": (6, 11_000),
+    "zerotrade_12m": (12, 11_000),
+}
+DAYS_PER_MONTH = 21  # zerotrade: counts scaled to 21 trading days a month
+MOMVOL_MONTHS, MOMVOL_MIN = 6, 5  # MomVol: mean turnover, >= 5 of 6 months
+MOMVOL_MIN_ROWS = 24  # MomVol: from a stock's 24th month in the data
+
+
+def add_turnover_signals(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `share_vol`, `vol_mkt`, `std_turn`, `zerotrade_1m/6m/12m`, `mom_vol`.
+
+    Turnover = shares traded in the month / shares outstanding. Sharadar's daily
+    volume and its filings' shares (`sharesbas` x `sharefactor`) are both restated
+    to the latest split basis (checked on AAPL's 2020 4:1 split), so the ratio is
+    unaffected by splits. Shares come from the latest filing, so they are fixed
+    between filings. OSAP's code, with these differences:
+    - `share_vol`: 0 if average turnover over 3 months is under 5% a month, 1 if over
+      10%, NaN in between (ShareVol; Datar, Naik & Radcliffe 1998). OSAP also drops
+      months whose share count changed in the last 3; with quarterly filing shares
+      that would drop most months, so it is not done here.
+    - `vol_mkt`: mean monthly dollar volume over 12 months (>= 10) / market cap
+      (VolMkt; Haugen & Baker 1996).
+    - `std_turn`: std of monthly turnover over 36 months (>= 24), NaN for the month's
+      two largest fifths by market cap (std_turn; Chordia, Subrahmanyam & Anshuman 2001).
+    - `zerotrade_1m/6m/12m`: Liu's LM: zero-volume days + (1 / turnover) / deflator,
+      over the last 1/6/12 months (all required), scaled to 21 trading days a month
+      and taken one month back, as OSAP does (zerotrade1M/6M/12M; Liu 2006).
+      NaN with no volume at all (1 / 0).
+    - `mom_vol`: decile (1-10) of past 6-month return (months t-5..t-1) among
+      high-turnover stocks (top third of 6-month mean turnover); NaN otherwise and
+      before a stock's 24th month (MomVol; Lee & Swaminathan 2000). OSAP ranks raw
+      share volume; turnover is used here as in the paper, since split-restated
+      share volume is not comparable across stocks.
+    Deciles and size fifths are within the month across the panel's stocks. All
+    windows end at this month: no look-ahead.
+    """
+    panel = _sorted_by_stock(panel)
+    shares = panel["sharesbas"] * panel["sharefactor"]
+    turnover = panel["share_volume"] / shares.where(shares > 0)
+
+    share_vol_pct = 100 * _own_rolling(panel, turnover, SHAREVOL_MONTHS, SHAREVOL_MONTHS)
+    share_vol = pd.Series(np.nan, index=panel.index)
+    share_vol[share_vol_pct < SHAREVOL_LOW] = 0.0
+    share_vol[share_vol_pct > SHAREVOL_HIGH] = 1.0
+
+    mean_dollar_volume = _own_rolling(panel, panel["dollar_volume"], VOLMKT_MONTHS, VOLMKT_MIN)
+    market_cap = panel["market_cap"].where(panel["market_cap"] > 0)
+
+    std_turn = _own_rolling(panel, turnover, STDTURN_MONTHS, STDTURN_MIN, "std")
+    cap_rank = panel.groupby("month_end")["market_cap"].rank(pct=True)
+
+    def total(values: pd.Series, months: int) -> pd.Series:
+        return _own_rolling(panel, values, months, months, "sum")
+
+    zerotrade = {}
+    days, zero_days = panel["n_trade_days"], panel["n_zero_volume"]
+    for name, (months, deflator) in ZEROTRADE.items():
+        turn = total(turnover, months)
+        lm = (total(zero_days, months) + (1 / turn.where(turn > 0)) / deflator) * (
+            DAYS_PER_MONTH * months / total(days, months)
+        )
+        zerotrade[name] = _months_ago(panel, lm, 1)
+
+    ret = panel["ret"].fillna(0)
+    past = pd.Series(1.0, index=panel.index)
+    for lag in range(1, 6):
+        past = past * (1 + _months_ago(panel, ret, lag))
+    keys = panel[["month_end"]].assign(
+        mom=past - 1, turn=_own_rolling(panel, turnover, MOMVOL_MONTHS, MOMVOL_MIN)
+    )
+    by_month = keys.groupby("month_end")
+    mom_decile = np.ceil(10 * by_month["mom"].rank(pct=True))
+    high_turnover = by_month["turn"].rank(pct=True) > 2 / 3
+    old_enough = panel.groupby("permaticker").cumcount() >= MOMVOL_MIN_ROWS - 1
+    mom_vol = mom_decile.where(high_turnover & old_enough)
+
+    return _with(
+        panel,
+        share_vol=share_vol,
+        vol_mkt=mean_dollar_volume / market_cap,
+        std_turn=std_turn.where(cap_rank <= STDTURN_LARGE),
+        **zerotrade,
+        mom_vol=mom_vol,
     )
 
 

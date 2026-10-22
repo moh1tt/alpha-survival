@@ -1065,3 +1065,91 @@ def test_financing_signals_ignore_later_months_and_other_stocks():
     out = features.add_financing_signals(pd.concat([shocked, other], ignore_index=True))
     out = out[out["permaticker"] == 1].reset_index(drop=True)
     pd.testing.assert_frame_equal(out.loc[:65, FINANCING_SIGNALS], base.loc[:65, FINANCING_SIGNALS])
+
+
+TURNOVER_SIGNALS = [
+    "share_vol",
+    "vol_mkt",
+    "std_turn",
+    "zerotrade_1m",
+    "zerotrade_6m",
+    "zerotrade_12m",
+    "mom_vol",
+]
+
+
+def turnover_panel(turnover=0.1, n_months=40, permaticker=1, market_cap=1e8, **overrides):
+    """1,000 shares outstanding, so share_volume = 1,000 x monthly turnover."""
+    panel = daily_summary_panel(n_months=n_months, permaticker=permaticker)
+    columns = {
+        "share_volume": 1000.0 * np.asarray(turnover, dtype=float),
+        "sharesbas": 500.0,
+        "sharefactor": 2.0,
+        "market_cap": market_cap,
+        "n_zero_volume": 0.0,
+    }
+    return panel.assign(**(columns | overrides))
+
+
+def test_share_vol_buckets_three_month_turnover():
+    turnover = np.r_[[0.03] * 10, [0.12] * 10, [0.07] * 20]
+    out = features.add_turnover_signals(turnover_panel(turnover))["share_vol"]
+    assert out.iloc[:2].isna().all()  # needs 3 months
+    assert out.iloc[2] == 0.0 and out.iloc[19] == 1.0  # 3% and 12% a month
+    assert np.isnan(out.iloc[11])  # (3 + 12 + 12) / 3 = 9%: between the cut-offs
+    assert np.isnan(out.iloc[30])  # 7%
+
+
+def test_vol_mkt_is_mean_dollar_volume_over_market_cap():
+    out = features.add_turnover_signals(turnover_panel())["vol_mkt"]
+    # dollar_volume = 1e6 x (i + 1); months 19..30 hold 20..31, averaging 25.5.
+    assert out.iloc[30] == pytest.approx(25.5e6 / 1e8)
+    assert out.iloc[:9].isna().all() and out.iloc[9] == pytest.approx(5.5e6 / 1e8)
+
+
+def test_std_turn_by_hand_and_drops_large_caps():
+    turnover = np.tile([0.1, 0.3], 20)
+    stocks = [turnover_panel(turnover, permaticker=k, market_cap=1e8 * k) for k in range(1, 6)]
+    out = features.add_turnover_signals(pd.concat(stocks, ignore_index=True))
+    first = out[out["permaticker"] == 1]["std_turn"]
+    assert first.iloc[:23].isna().all()  # needs 24 months
+    assert first.iloc[35] == pytest.approx(np.std([0.1, 0.3] * 18, ddof=1))
+    large = out[out["permaticker"] >= 4]["std_turn"]
+    assert large.isna().all()  # the two largest fifths by market cap
+
+
+def test_zerotrade_counts_zero_volume_days_one_month_back():
+    out = features.add_turnover_signals(turnover_panel(n_zero_volume=2.0))
+    # 20 trading days a month, 2 without volume, turnover 10% a month.
+    assert out["zerotrade_1m"].iloc[0:1].isna().all()  # one month back
+    assert out["zerotrade_1m"].iloc[5] == pytest.approx((2 + 10 / 480_000) * 21 / 20)
+    assert out["zerotrade_6m"].iloc[:6].isna().all()
+    six = (12 + (1 / 0.6) / 11_000) * (21 * 6 / 120)
+    assert out["zerotrade_6m"].iloc[6] == pytest.approx(six)
+    assert out["zerotrade_12m"].iloc[:12].isna().all() and out["zerotrade_12m"].iloc[12] > 0
+    silent = turnover_panel(np.r_[[0.1] * 10, [0.0] * 30])
+    assert features.add_turnover_signals(silent)["zerotrade_1m"].iloc[11:].isna().all()
+
+
+def test_mom_vol_is_momentum_decile_among_high_turnover_stocks():
+    # 30 stocks: stock k earns 0.001 x k a month and turns over k% a month.
+    stocks = [turnover_panel(k / 100, permaticker=k).assign(ret=0.001 * k) for k in range(1, 31)]
+    out = features.add_turnover_signals(pd.concat(stocks, ignore_index=True))
+    at = out[out["month_end"] == out["month_end"].iloc[30]].set_index("permaticker")["mom_vol"]
+    assert at.loc[30] == 10.0 and at.loc[21] == 7.0  # momentum rank 21 of 30
+    assert at.loc[:20].isna().all()  # bottom two thirds by turnover
+    assert out.groupby("permaticker")["mom_vol"].apply(lambda m: m.iloc[:23].isna().all()).all()
+
+
+def test_turnover_signals_ignore_later_months_and_other_stocks():
+    turnover = np.linspace(0.02, 0.2, 40)
+    base = features.add_turnover_signals(turnover_panel(turnover, n_zero_volume=1.0))
+    shocked = turnover_panel(turnover, n_zero_volume=1.0)
+    cols = ["share_volume", "dollar_volume", "n_zero_volume", "ret"]
+    shocked.loc[shocked.index >= 36, cols] = [9e9, 9e9, 20.0, 5.0]
+    other = turnover_panel(5.0, permaticker=2, market_cap=1.0)
+    out = features.add_turnover_signals(pd.concat([shocked, other], ignore_index=True))
+    out = out[out["permaticker"] == 1].reset_index(drop=True)
+    # Cross-sectional ranks (std_turn size cut, mom_vol) depend on the other stock.
+    own = ["share_vol", "vol_mkt", "zerotrade_1m", "zerotrade_6m", "zerotrade_12m"]
+    pd.testing.assert_frame_equal(out.loc[:35, own], base.loc[:35, own])

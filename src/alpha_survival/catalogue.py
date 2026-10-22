@@ -130,6 +130,14 @@ FEATURE_ACRONYMS = {
     "share_iss_1y": "ShareIss1Y",
     "share_iss_5y": "ShareIss5Y",
     "share_repurchase": "ShareRepurchase",
+    # Step 60: turnover and volume
+    "share_vol": "ShareVol",
+    "vol_mkt": "VolMkt",
+    "std_turn": "std_turn",
+    "zerotrade_1m": "zerotrade1M",
+    "zerotrade_6m": "zerotrade6M",
+    "zerotrade_12m": "zerotrade12M",
+    "mom_vol": "MomVol",
 }
 
 

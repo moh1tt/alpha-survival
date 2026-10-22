@@ -77,6 +77,7 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["share_volume"] = rng.uniform(1e5, 1e7, len(panel))
     panel["dollar_volume"] = panel["share_volume"] * panel["close_split_adj"]
     panel["investable"] = True
+    panel["n_zero_volume"] = rng.integers(0, 3, len(panel))
     return panel
 
 
@@ -170,7 +171,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 87
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 94
 
 
 def test_prepare_ranks_among_investable_stocks_only():
