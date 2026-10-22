@@ -127,7 +127,7 @@ ReturnSkew3F,Price,-1,"Bali, Engle and Murray (2015), Book",computable,3,sep:clo
 TrendFactor,Price,1,"Han, Zhou, Zhu (2016), JFE",computable,3,sep:closeadj,,moving averages combined by cross-sectional regression
 betaVIX,Price,-1,"Ang et al. (2006), JF",computable,3,sep:closeadj,"fred:VIXCLS; kenfrench:mktrf,rf",
 FirmAge,Other,-1,"Barry and Brown (1984), JFE",approximate,1,tickers:firstpricedate,,"months since first Sharadar price, truncated for old firms"
-VolSD,Trading,-1,"Chordia, Subra, Anshuman (2001), JFE",approximate,1,sep:volume; tickers:exchange,,NYSE filter uses current exchange only
+VolSD,Trading,-1,"Chordia, Subra, Anshuman (2001), JFE",computable,1,sep:volume,,"OSAP code applies no NYSE filter (SignalDoc mentions one); we follow the code"
 Accruals,Accounting,-1,"Sloan (1996), AR",approximate,2,"sf1:assetsc,cashneq,liabilitiesc,debtc,depamor",,no income-taxes-payable field: term dropped
 BPEBM,Accounting,-1,"Penman, Richardson and Tuna (2007), JAR",approximate,2,"sf1:equity,cashneq,debt; sep",,no preferred arrears / treasury stock
 BookLeverage,Accounting,-1,"Fama and French (1992), JF",approximate,2,"sf1:assets,equity,taxliabilities",,deferred taxes ~ taxliabilities; no separate preferred stock

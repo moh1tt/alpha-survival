@@ -403,3 +403,92 @@ def test_seasonality_ignores_current_month_target_and_future_and_other_stocks():
     out = out[out["permaticker"] == 1].reset_index(drop=True)
     cols = list(features.SEASONAL_LAGS)
     pd.testing.assert_frame_equal(out.loc[:49, cols], base.loc[:49, cols])
+
+
+def daily_summary_panel(n_months=40, permaticker=1, start="2020-01-31"):
+    """Monthly rows with hand-set daily summaries; month i's values encode i."""
+    i = np.arange(n_months, dtype=float)
+    return pd.DataFrame(
+        {
+            "permaticker": permaticker,
+            "month_end": pd.date_range(start, periods=n_months, freq="ME"),
+            "ret": 0.01,
+            "fwd_ret": 0.0,
+            "n_days": 20.0,
+            "n_trade_days": 20.0,
+            "dret_sum": 0.0,
+            "dret_sumsq": 0.02,
+            "dret_sumcube": 0.0,
+            "dret_max": 0.01 * (i + 1),
+            "close_split_adj": 100.0 + i,
+            "close_max": 110.0 + i,
+            "illiq_sum": 20 * (i + 1),
+            "illiq_n": 20.0,
+            "dollar_volume": 1e6 * (i + 1),
+            "share_volume": 1e4 * (i + 1) ** 2,
+        }
+    )
+
+
+def test_daily_price_signals_by_hand():
+    out = features.add_daily_price_signals(daily_summary_panel())
+    t = 30
+    assert out["max_ret"].iloc[t] == pytest.approx(0.31)
+    assert out["return_skew"].iloc[t] == 0.0  # zero third moment
+    # High52: close at t over the max close_max of months t-11..t (rising, so month t's).
+    assert out["high_52"].iloc[t] == pytest.approx((100 + t) / (110 + t))
+    # Illiquidity: mean of monthly means (i + 1) over months t-11..t.
+    assert out["illiquidity"].iloc[t] == pytest.approx(np.mean(np.arange(t - 10, t + 2)))
+    assert out["dol_vol"].iloc[t] == pytest.approx(np.log(1e6 * (t - 1)))  # month t-2
+    months = np.arange(max(0, t - 35), t + 1)  # 36-month window, clipped at the first month
+    assert out["vol_sd"].iloc[t] == pytest.approx(np.std(1e4 * (months + 1.0) ** 2, ddof=1))
+
+
+def test_return_skew_by_hand_and_needs_15_days():
+    rets = np.array([0.05, -0.01, -0.01, -0.01, -0.02])
+    row = daily_summary_panel(n_months=1).assign(
+        n_days=5.0,
+        dret_sum=rets.sum(),
+        dret_sumsq=(rets**2).sum(),
+        dret_sumcube=(rets**3).sum(),
+    )
+    from scipy.stats import skew
+
+    few = features.add_daily_price_signals(row.assign(n_trade_days=14.0))
+    assert np.isnan(few["return_skew"].iloc[0])
+    enough = features.add_daily_price_signals(row.assign(n_trade_days=15.0))
+    assert enough["return_skew"].iloc[0] == pytest.approx(skew(rets))  # population skew
+
+
+def test_daily_price_signal_windows_need_their_history():
+    out = features.add_daily_price_signals(daily_summary_panel())
+    assert out["illiquidity"].iloc[:11].isna().all() and out["illiquidity"].iloc[11:].notna().all()
+    assert out["dol_vol"].iloc[:2].isna().all() and np.isfinite(out["dol_vol"].iloc[2])
+    assert out["vol_sd"].iloc[:23].isna().all() and out["vol_sd"].iloc[23:].notna().all()
+    assert out["high_52"].notna().all()  # uses whatever of the 12 months exist
+
+
+def test_daily_price_windows_run_over_calendar_months():
+    # Drop month 25: illiquidity at month 30 needs months 19-30, so it is NaN;
+    # at month 37 (window 26-37) it is back. dol_vol at month 27 reads month 25: NaN.
+    out = features.add_daily_price_signals(daily_summary_panel().drop(index=25))
+    out = out.set_index(out["month_end"].dt.to_period("M"))
+    first = pd.Period("2020-01", "M")
+    assert np.isnan(out.loc[first + 30, "illiquidity"])
+    assert np.isfinite(out.loc[first + 37, "illiquidity"])
+    assert np.isnan(out.loc[first + 27, "dol_vol"])
+
+
+def test_daily_price_signals_ignore_current_target_future_and_other_stocks():
+    base = features.add_daily_price_signals(daily_summary_panel())
+    shocked = daily_summary_panel()
+    later = shocked.index >= 31
+    shocked.loc[later, ["dret_max", "close_max", "illiq_sum", "dollar_volume", "share_volume"]] = (
+        9e9
+    )
+    shocked["fwd_ret"] = 99.0
+    other = daily_summary_panel(permaticker=2).assign(close_max=1e9, share_volume=1.0)
+    out = features.add_daily_price_signals(pd.concat([shocked, other], ignore_index=True))
+    out = out[out["permaticker"] == 1].reset_index(drop=True)
+    cols = ["max_ret", "return_skew", "high_52", "illiquidity", "dol_vol", "vol_sd"]
+    pd.testing.assert_frame_equal(out.loc[:30, cols], base.loc[:30, cols])

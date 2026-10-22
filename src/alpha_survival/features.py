@@ -129,13 +129,8 @@ def add_seasonality(panel: pd.DataFrame) -> pd.DataFrame:
     only if none of the lags has a return. Earlier months only: no look-ahead.
     """
     panel = _sorted_by_stock(panel)
-    wide = panel.pivot(index="month_end", columns="permaticker", values="ret")
-    calendar = pd.date_range(wide.index.min(), wide.index.max(), freq="ME")
-    if not wide.index.isin(calendar).all():
-        raise ValueError("month_end values must be calendar month ends")
-    grid = wide.reindex(calendar).to_numpy()
-    rows = calendar.get_indexer(panel["month_end"])
-    cols = wide.columns.get_indexer(panel["permaticker"])
+    returns = _calendar_grid(panel, "ret")
+    grid = returns.to_numpy()
 
     added = {}
     for name, lags in SEASONAL_LAGS.items():
@@ -150,8 +145,86 @@ def add_seasonality(panel: pd.DataFrame) -> pd.DataFrame:
             count += seen
         with np.errstate(invalid="ignore", divide="ignore"):
             mean = np.where(count > 0, total / count, np.nan)
-        added[name] = mean[rows, cols]
+        added[name] = _at_rows(pd.DataFrame(mean), panel, returns)
     return panel.assign(**added)
+
+
+def _calendar_grid(panel: pd.DataFrame, column: str) -> pd.DataFrame:
+    """`column` as a month x stock table over every calendar month in the panel.
+
+    Months a stock has no row are NaN, so shifting or rolling this table moves by
+    calendar months, never by rows: a gap cannot stretch a window.
+    """
+    wide = panel.pivot(index="month_end", columns="permaticker", values=column)
+    calendar = pd.date_range(wide.index.min(), wide.index.max(), freq="ME")
+    if not wide.index.isin(calendar).all():
+        raise ValueError("month_end values must be calendar month ends")
+    return wide.reindex(calendar)
+
+
+def _at_rows(values: pd.DataFrame, panel: pd.DataFrame, like: pd.DataFrame) -> np.ndarray:
+    """Read a month x stock result (shaped like the grid `like`) back onto panel rows."""
+    rows = like.index.get_indexer(panel["month_end"])
+    cols = like.columns.get_indexer(panel["permaticker"])
+    return values.to_numpy()[rows, cols]
+
+
+# Price and trading signals from the monthly daily-return summaries (OSAP's code).
+# Each sign is in run.PUBLISHED_SIGN.
+MIN_SKEW_DAYS = 15  # ReturnSkew: OSAP requires 15 trading days in the month
+HIGH52_MONTHS = 12  # High52: this month and the 11 before
+ILLIQ_MONTHS = 12  # Illiquidity: 12 monthly Amihud means, all required
+DOLVOL_LAG = 2  # DolVol: dollar volume two months back
+VOLSD_MONTHS, VOLSD_MIN = 36, 24  # VolSD: std of monthly volume, >= 24 of 36 months
+
+
+def add_daily_price_signals(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `max_ret`, `return_skew`, `high_52`, `illiquidity`, `dol_vol`, `vol_sd`.
+
+    Built from `data.real.DAILY_SUMMARY_COLUMNS`, so only days up to each
+    month_end. Windows run over calendar months (`_calendar_grid`).
+    - `max_ret`: the month's largest daily return (MaxRet; Bali, Cakici & Whitelaw 2011).
+    - `return_skew`: skewness of the month's daily returns, NaN with fewer than
+      `MIN_SKEW_DAYS` trading days (ReturnSkew).
+    - `high_52`: month-end close over the highest close of the last 12 months
+      (High52; George & Hwang 2004). Both split-adjusted the same way, so the
+      backward adjustment cancels in the ratio.
+    - `illiquidity`: mean over 12 months of each month's mean daily |return| per
+      dollar traded (Illiquidity; Amihud 2002); NaN unless all 12 exist.
+    - `dol_vol`: log of dollars traded two months back (DolVol). OSAP uses monthly
+      volume x month-end price; we sum the actual daily dollars.
+    - `vol_sd`: std of monthly share volume over 36 months, >= 24 required (VolSD).
+    """
+    panel = _sorted_by_stock(panel)
+
+    n, s1 = panel["n_days"], panel["dret_sum"]
+    mean = s1 / n
+    m2 = panel["dret_sumsq"] / n - mean**2
+    m3 = panel["dret_sumcube"] / n - 3 * mean * panel["dret_sumsq"] / n + 2 * mean**3
+    skew = (m3 / m2**1.5).where((panel["n_trade_days"] >= MIN_SKEW_DAYS) & (m2 > 0))
+
+    close_max = _calendar_grid(panel, "close_max")
+    high = close_max.rolling(HIGH52_MONTHS, min_periods=1).max()
+
+    monthly_illiq = panel["illiq_sum"] / panel["illiq_n"].where(panel["illiq_n"] > 0)
+    illiq = _calendar_grid(panel.assign(_m=monthly_illiq), "_m")
+    illiq_12m = illiq.rolling(ILLIQ_MONTHS, min_periods=ILLIQ_MONTHS).mean()
+
+    dollars = _calendar_grid(panel, "dollar_volume")
+    lagged = dollars.shift(DOLVOL_LAG)
+    volume = _calendar_grid(panel, "share_volume")
+    vol_sd = volume.rolling(VOLSD_MONTHS, min_periods=VOLSD_MIN).std()
+
+    with np.errstate(divide="ignore"):
+        dol_vol = np.log(lagged.where(lagged > 0))
+    return panel.assign(
+        max_ret=panel["dret_max"],
+        return_skew=skew,
+        high_52=panel["close_split_adj"] / _at_rows(high, panel, close_max),
+        illiquidity=_at_rows(illiq_12m, panel, illiq),
+        dol_vol=_at_rows(dol_vol, panel, dollars),
+        vol_sd=_at_rows(vol_sd, panel, volume),
+    )
 
 
 def add_profitability(panel: pd.DataFrame) -> pd.DataFrame:
