@@ -17,29 +17,76 @@ import pandas as pd
 MOMENTUM_MONTHS = 11
 
 
+def _sorted_by_stock(panel: pd.DataFrame) -> pd.DataFrame:
+    keys = ["permaticker", "month_end"]
+    if panel.duplicated(keys).any():
+        raise ValueError("panel has duplicate (permaticker, month_end) rows")
+    return panel.sort_values(keys).reset_index(drop=True)
+
+
+def _past_return(panel: pd.DataFrame, first: int, last: int) -> pd.Series:
+    """Compounded return of months t-first .. t-last (lags), per stock.
+
+    `panel` must be sorted by stock and month. NaN unless every monthly return in
+    the window exists and the rows are consecutive months, so a gap in the price
+    history never stretches the window. Uses earlier rows only.
+    """
+    by_stock = panel.groupby("permaticker")
+    growth = pd.Series(1.0, index=panel.index)
+    for lag in range(first, last + 1):
+        growth = growth * (1 + by_stock["ret"].shift(lag))  # NaN anywhere -> NaN
+    # The oldest row must be exactly `last` months back; otherwise rows are
+    # missing and the window spans more months than it should.
+    oldest = by_stock["month_end"].shift(last).dt.to_period("M")
+    consecutive = oldest == panel["month_end"].dt.to_period("M") - last
+    return (growth - 1).where(consecutive)
+
+
 def add_momentum(panel: pd.DataFrame) -> pd.DataFrame:
     """Add `mom_12_1`: the compounded return over months t-11 .. t-1.
 
     NaN unless all 11 monthly returns exist and come from consecutive months, so a
     gap in the price history never turns into a longer window passed off as a year.
     """
-    keys = ["permaticker", "month_end"]
-    if panel.duplicated(keys).any():
-        raise ValueError("panel has duplicate (permaticker, month_end) rows")
+    panel = _sorted_by_stock(panel)
+    return panel.assign(mom_12_1=_past_return(panel, 1, MOMENTUM_MONTHS))
 
-    panel = panel.sort_values(keys).reset_index(drop=True)
-    by_stock = panel.groupby("permaticker")
 
-    growth = pd.Series(1.0, index=panel.index)
-    for lag in range(1, MOMENTUM_MONTHS + 1):
-        growth = growth * (1 + by_stock["ret"].shift(lag))  # NaN anywhere -> NaN
+# Other windows of past returns, as (first lag, last lag) in months, matching the
+# Open Source Asset Pricing code (Chen & Zimmermann 2022), whose Mom12m uses lags
+# 1-11 like our mom_12_1. Each signal's sign is in run.PUBLISHED_SIGN.
+PAST_RETURN_WINDOWS = {
+    "mom_6m": (1, 5),  # Mom6m: Jegadeesh & Titman 1993
+    "int_mom": (7, 12),  # IntMom: Novy-Marx 2012, intermediate momentum
+    "mr_reversal": (13, 18),  # MRreversal: De Bondt & Thaler 1985, medium-run reversal
+    "lr_reversal": (13, 36),  # LRreversal: De Bondt & Thaler 1985, long-run reversal
+}
+# MomRev (Chan & Ko 2006): the 36-month window for "long-run loser/winner".
+MOM_REV_LONG = (13, 36)
 
-    # The oldest row in the window must be exactly 11 months back; otherwise rows
-    # are missing and the 11 rows span more than 11 months.
-    oldest = by_stock["month_end"].shift(MOMENTUM_MONTHS).dt.to_period("M")
-    consecutive = oldest == panel["month_end"].dt.to_period("M") - MOMENTUM_MONTHS
 
-    return panel.assign(mom_12_1=(growth - 1).where(consecutive))
+def add_past_returns(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add the momentum and reversal family: `PAST_RETURN_WINDOWS` plus `mom_rev`.
+
+    `mom_rev` = 1 for stocks in the top fifth on 6-month momentum and the bottom
+    fifth on 36-month return (recent winners that were long-run losers), 0 for the
+    opposite, NaN for everyone else. Fifths are formed each month across the rows
+    passed in, from returns known at month_end: no look-ahead.
+    """
+    panel = _sorted_by_stock(panel)
+    added = {name: _past_return(panel, *lags) for name, lags in PAST_RETURN_WINDOWS.items()}
+    long_run = _past_return(panel, *MOM_REV_LONG)
+
+    def fifth(values: pd.Series) -> pd.Series:
+        return values.groupby(panel["month_end"]).transform(
+            lambda v: pd.qcut(v, 5, labels=False, duplicates="drop") + 1
+        )
+
+    short_q, long_q = fifth(added["mom_6m"]), fifth(long_run)
+    mom_rev = pd.Series(np.nan, index=panel.index)
+    mom_rev[(short_q == 5) & (long_q == 1)] = 1.0
+    mom_rev[(short_q == 1) & (long_q == 5)] = 0.0
+    return panel.assign(**added, mom_rev=mom_rev)
 
 
 def add_profitability(panel: pd.DataFrame) -> pd.DataFrame:

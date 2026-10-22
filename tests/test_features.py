@@ -279,3 +279,64 @@ def test_volatility_ignores_later_months_and_other_stocks():
         pd.concat([a_future, b.assign(dret_sumsq=9.0)], ignore_index=True)
     )
     assert base["vol_3m"].iloc[:4].equals(shocked["vol_3m"].iloc[:4])
+
+
+# 40 months of distinct returns, so every window's product is unique.
+LONG_RETS = [np.nan] + [0.01 * ((i % 7) - 3) + 0.001 * i for i in range(1, 40)]
+
+
+@pytest.mark.parametrize("name", list(features.PAST_RETURN_WINDOWS))
+def test_past_return_windows_compound_exactly_their_lags(name):
+    first, last = features.PAST_RETURN_WINDOWS[name]
+    out = features.add_past_returns(panel_for(1, LONG_RETS))
+    t = 39
+    expected = np.prod([1 + LONG_RETS[t - lag] for lag in range(first, last + 1)]) - 1
+    assert out[name].iloc[t] == pytest.approx(expected)
+    # NaN until the oldest lag exists: row `last` is the first with t-last at month 1's ret.
+    assert out[name].iloc[: last + 1].isna().all() and out[name].iloc[last + 1 :].notna().all()
+
+
+def test_past_return_window_matches_mom_12_1_convention():
+    # Lags 1-11 through the shared helper reproduce mom_12_1 exactly.
+    panel = features._sorted_by_stock(panel_for(1, LONG_RETS))
+    mom = features.add_momentum(panel)["mom_12_1"]
+    assert features._past_return(panel, 1, 11).equals(mom)
+
+
+def test_past_returns_ignore_current_month_target_and_future():
+    # Leakage test: shocking month t's ret, every target and all later rows moves nothing at t.
+    base = features.add_past_returns(panel_for(1, LONG_RETS))
+    shocked = panel_for(1, LONG_RETS)
+    shocked.loc[37:, "ret"] = [5.0, -0.9, 3.0]
+    shocked["fwd_ret"] = 99.0
+    out = features.add_past_returns(shocked)
+    cols = [*features.PAST_RETURN_WINDOWS, "mom_rev"]
+    pd.testing.assert_frame_equal(out.loc[:36, cols], base.loc[:36, cols])
+
+
+def test_past_returns_are_nan_across_a_gap():
+    panel = panel_for(1, LONG_RETS).drop(index=20)  # month 20 missing
+    out = features.add_past_returns(panel).set_index("month_end")
+    months = panel_for(1, LONG_RETS)["month_end"]
+    # mr_reversal at month 33 spans months 15-20 (lags 13-18): the gap makes it NaN;
+    # at month 39 it spans 21-26, after the gap: defined again.
+    assert np.isnan(out.loc[months[33], "mr_reversal"])
+    assert np.isfinite(out.loc[months[39], "mr_reversal"])
+
+
+def test_mom_rev_flags_recent_winners_that_were_long_run_losers():
+    # 10 stocks, 40 months. In the last month, stocks 0-1 rose recently after
+    # falling long-run (MomRev = 1); stocks 8-9 the reverse (0); the rest NaN.
+    stocks = []
+    for s in range(10):
+        # Last row is month 39: lags 1-5 are months 34-38, lags 13-36 months 3-26.
+        tilt = 0.05 * (s - 4.5)  # stock 0 most negative, stock 9 most positive
+        rets = [np.nan] + [0.0] * 39
+        rets[34:39] = [-tilt] * 5  # recent 6 months: low s = winners
+        rets[4:27] = [tilt] * 23  # long run: low s = losers
+        stocks.append(panel_for(s, rets))
+    out = features.add_past_returns(pd.concat(stocks, ignore_index=True))
+    last = out[out["month_end"] == out["month_end"].max()].set_index("permaticker")["mom_rev"]
+    assert last.loc[[0, 1]].tolist() == [1.0, 1.0]
+    assert last.loc[[8, 9]].tolist() == [0.0, 0.0]
+    assert last.loc[2:7].isna().all()
