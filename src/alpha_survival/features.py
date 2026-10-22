@@ -570,6 +570,19 @@ def _months_ago(panel: pd.DataFrame, values: str | pd.Series, months: int) -> pd
     return pd.Series(_at_rows(grid.shift(months), keys, grid), index=panel.index)
 
 
+def _own_rolling_mean(
+    panel: pd.DataFrame, values: pd.Series, window: int, min_periods: int
+) -> pd.Series:
+    """Mean of `values` over each stock's last `window` calendar months (this one
+    included), NaN with fewer than `min_periods` values."""
+    keys = pd.DataFrame(
+        {"permaticker": panel["permaticker"], "month_end": panel["month_end"], "v": values}
+    )
+    grid = _calendar_grid(keys, "v")
+    mean = grid.rolling(window, min_periods=min_periods).mean()
+    return pd.Series(_at_rows(mean, keys, grid), index=panel.index)
+
+
 TAX_RATE = 0.35  # Tax: OSAP's top statutory rate from 1993 (kept after 2018's cut to 21%)
 OPERPROF_SMALL = 1 / 3  # OperProf: drop the month's smallest third by market cap
 TANG_SIC = (2000, 3999)  # tang: manufacturers only
@@ -810,6 +823,93 @@ def add_balance_sheet_changes(panel: pd.DataFrame) -> pd.DataFrame:
         ch_eq=equity / ago(equity),
         ch_asset_turnover=change(turnover),
         invest_ppe_inv=(change("ppnenet") + change("inventory")) / assets_before,
+    )
+
+
+INVESTMENT_MONTHS, INVESTMENT_MIN = 36, 24  # Investment: own mean over >= 24 of 36 months
+INVESTMENT_MIN_REVENUE = 1e7  # Investment: OSAP drops sales under $10m (Compustat: 10)
+RD_SURPRISE = 1.05  # SurpriseRD: R&D up more than 5%, in dollars and per dollar of assets
+
+
+def add_investment_growth(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `investment`, `grcapx`, `grcapx3y`, `gr_sale_to_gr_inv`,
+    `gr_sale_to_gr_overhead`, `surprise_rd` (OSAP's code; signs in run.PUBLISHED_SIGN).
+
+    Sharadar reports capital expenditure as a cash outflow (negative), so capex =
+    -`capex`; the few positive values (asset sales netted in) become negative capex.
+    SG&A is `sgna + rnd`, as Compustat's xsga includes R&D (see
+    `add_profitability_ratios`). Ratios within one company's filings: currency cancels.
+    - `investment`: capex / revenue over its own mean of the last 36 months (>= 24,
+      this month included), NaN if revenue < $10m (Investment; Titman, Wei & Xie 2004).
+    - `grcapx`: capex now vs. 24 months ago, (now - then) / then (grcapx; Anderson &
+      Garcia-Feijoo 2006). Missing capex is replaced by the 12-month change in net
+      PP&E from the stock's 24th month in the data on, as OSAP does.
+    - `grcapx3y`: capex over the mean of capex 12, 24 and 36 months ago (grcapx3y).
+    - `gr_sale_to_gr_inv`: % growth in sales minus % growth in inventory, each vs.
+      the mean of 12 and 24 months ago, or vs. 12 months ago where that is missing
+      (GrSaleToGrInv; Abarbanell & Bushee 1998).
+    - `gr_sale_to_gr_overhead`: the same with SG&A (GrSaleToGrOverhead; same paper).
+    - `surprise_rd`: 1 if R&D is positive and grew more than 5% over 12 months both
+      in dollars and as a share of assets, else 0; NaN without R&D now and a year ago
+      (SurpriseRD; Eberhart, Maxwell & Siddique 2004). Sharadar reports no R&D as 0,
+      so non-R&D firms get 0 where Compustat would often have them missing.
+    Earlier values are the stock's own rows then (`_months_ago`): no look-ahead.
+    """
+    panel = _sorted_by_stock(panel)
+
+    def ago(values: str | pd.Series, months: int) -> pd.Series:
+        return _months_ago(panel, values, months)
+
+    def growth(now: pd.Series, before: pd.Series) -> pd.Series:
+        return (now - before) / before.where(before != 0)
+
+    revenue = panel["revenue"]
+    capex = -panel["capex"]
+    ratio = capex / revenue.where(revenue != 0)
+    ratio_mean = _own_rolling_mean(panel, ratio, INVESTMENT_MONTHS, INVESTMENT_MIN)
+    investment = (ratio / ratio_mean.where(ratio_mean != 0)).where(
+        revenue >= INVESTMENT_MIN_REVENUE
+    )
+
+    ppe_change = panel["ppnenet"] - ago("ppnenet", 12)
+    capex = capex.fillna(ppe_change.where(_months_listed(panel) >= 24))
+    capex_before = {m: ago(capex, m) for m in (12, 24, 36)}
+    three_year = (capex_before[12] + capex_before[24] + capex_before[36]) / 3
+
+    def growth_gap(values: pd.Series, other: pd.Series) -> pd.Series:
+        """% growth of `values` minus that of `other`, each vs. the mean of 12 and 24
+        months ago; where that is missing, both vs. 12 months ago (OSAP)."""
+
+        def vs_two_years(series: pd.Series) -> pd.Series:
+            return growth(series, (ago(series, 12) + ago(series, 24)) / 2)
+
+        def vs_one_year(series: pd.Series) -> pd.Series:
+            return growth(series, ago(series, 12))
+
+        two_years = vs_two_years(values) - vs_two_years(other)
+        return two_years.fillna(vs_one_year(values) - vs_one_year(other))
+
+    sga = panel["sgna"] + panel["rnd"].fillna(0)
+
+    rnd = panel["rnd"]
+    rnd_before = ago("rnd", 12)
+    assets = panel["assets"].where(panel["assets"] > 0)
+    rnd_intensity_before = rnd_before / ago(assets, 12)
+    surprise = (
+        (rnd / revenue > 0)
+        & (rnd / assets > 0)
+        & (rnd / rnd_before > RD_SURPRISE)
+        & ((rnd / assets) / rnd_intensity_before > RD_SURPRISE)
+    ).astype(float)
+
+    return _with(
+        panel,
+        investment=investment,
+        grcapx=growth(capex, capex_before[24]),
+        grcapx3y=capex / three_year.where(three_year != 0),
+        gr_sale_to_gr_inv=growth_gap(revenue, panel["inventory"]),
+        gr_sale_to_gr_overhead=growth_gap(revenue, sga),
+        surprise_rd=surprise.where(rnd.notna() & rnd_before.notna()),
     )
 
 

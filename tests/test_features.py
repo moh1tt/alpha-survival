@@ -929,3 +929,78 @@ def test_balance_sheet_changes_need_twelve_months_and_ignore_the_future():
     out = features.add_balance_sheet_changes(pd.concat([shocked, other], ignore_index=True))
     out = out[out["permaticker"] == 1].reset_index(drop=True)
     pd.testing.assert_frame_equal(out.loc[:19, BS_CHANGES], base.loc[:19, BS_CHANGES])
+
+
+GROWTH_SIGNALS = [
+    "investment",
+    "grcapx",
+    "grcapx3y",
+    "gr_sale_to_gr_inv",
+    "gr_sale_to_gr_overhead",
+    "surprise_rd",
+]
+
+
+def growth_panel(n_months=42, permaticker=1, **overrides):
+    defaults = {"capex": -100.0}  # Sharadar: capex is a cash outflow
+    return change_panel(n_months=n_months, permaticker=permaticker, **(defaults | overrides))
+
+
+def test_investment_is_capex_intensity_over_its_own_three_year_mean():
+    panel = growth_panel()
+    panel.loc[41, "capex"] = -200.0
+    out = features.add_investment_growth(panel)
+    ratio = 100 / 1e7
+    mean = (35 * ratio + 2 * ratio) / 36  # months 6..41
+    assert out["investment"].iloc[41] == pytest.approx(2 * ratio / mean)
+    assert out["investment"].iloc[:23].isna().all() and out["investment"].iloc[23] == 1.0
+    small = features.add_investment_growth(growth_panel(revenue=5e6))
+    assert small["investment"].isna().all()  # revenue under $10m
+
+
+def test_capex_growth_by_hand_and_ppe_fallback():
+    m = np.arange(42, dtype=float)
+    out = features.add_investment_growth(growth_panel(capex=-(100 + m)))
+    assert out["grcapx"].iloc[30] == pytest.approx((130 - 106) / 106)
+    assert out["grcapx3y"].iloc[40] == pytest.approx(140 / ((128 + 116 + 104) / 3))
+    assert out["grcapx"].iloc[:24].isna().all() and out["grcapx3y"].iloc[:36].isna().all()
+    # Capex missing in month 30: replaced by the 12-month change in net PP&E.
+    panel = growth_panel(capex=-(100 + m), ppnenet=400 + 5 * m)
+    panel.loc[30, "capex"] = np.nan
+    out = features.add_investment_growth(panel)
+    assert out["grcapx"].iloc[30] == pytest.approx((60 - 106) / 106)
+
+
+def test_sales_growth_gaps_vs_two_years_and_one_year_fallback():
+    m = np.arange(42, dtype=float)
+    out = features.add_investment_growth(growth_panel(revenue=1000 + 10 * m, inventory=80.0))
+    assert out["gr_sale_to_gr_inv"].iloc[30] == pytest.approx((1300 - 1120) / 1120)
+    assert out["gr_sale_to_gr_inv"].iloc[15] == pytest.approx((1150 - 1030) / 1030)
+    assert out["gr_sale_to_gr_inv"].iloc[:12].isna().all()
+    # Overhead is SG&A incl. R&D: 150 + 20 = 170, growing 2 a month.
+    out = features.add_investment_growth(growth_panel(revenue=1000.0, sgna=150 + 2 * m))
+    overhead_growth = (170 + 60 - (170 + 36 + 170 + 12) / 2) / ((170 + 36 + 170 + 12) / 2)
+    assert out["gr_sale_to_gr_overhead"].iloc[30] == pytest.approx(-overhead_growth)
+
+
+def test_surprise_rd():
+    panel = growth_panel(n_months=14)
+    panel.loc[13, "rnd"] = 22.0  # +10% with assets unchanged
+    out = features.add_investment_growth(panel)
+    assert out["surprise_rd"].iloc[13] == 1.0 and out["surprise_rd"].iloc[12] == 0.0
+    assert out["surprise_rd"].iloc[:12].isna().all()
+    panel.loc[13, "assets"] = 2400.0  # R&D per dollar of assets falls: no surprise
+    assert features.add_investment_growth(panel)["surprise_rd"].iloc[13] == 0.0
+    no_rnd = features.add_investment_growth(growth_panel(n_months=14, rnd=np.nan))
+    assert no_rnd["surprise_rd"].isna().all()
+
+
+def test_investment_growth_ignores_later_months_and_other_stocks():
+    m = np.arange(42, dtype=float)
+    base = features.add_investment_growth(growth_panel(capex=-(100 + m), revenue=1e7 + m))
+    shocked = growth_panel(capex=-(100 + m), revenue=1e7 + m)
+    shocked.loc[shocked.index >= 38, ["capex", "revenue", "rnd", "inventory"]] = [-9e9, 1, 9e9, 0]
+    other = growth_panel(permaticker=2, capex=-1e12, revenue=1.0)
+    out = features.add_investment_growth(pd.concat([shocked, other], ignore_index=True))
+    out = out[out["permaticker"] == 1].reset_index(drop=True)
+    pd.testing.assert_frame_equal(out.loc[:37, GROWTH_SIGNALS], base.loc[:37, GROWTH_SIGNALS])

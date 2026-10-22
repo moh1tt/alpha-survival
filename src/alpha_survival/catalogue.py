@@ -114,6 +114,13 @@ FEATURE_ACRONYMS = {
     "ch_eq": "ChEQ",
     "ch_asset_turnover": "ChAssetTurnover",
     "invest_ppe_inv": "InvestPPEInv",
+    # Step 58: investment and growth
+    "investment": "Investment",
+    "grcapx": "grcapx",
+    "grcapx3y": "grcapx3y",
+    "gr_sale_to_gr_inv": "GrSaleToGrInv",
+    "gr_sale_to_gr_overhead": "GrSaleToGrOverhead",
+    "surprise_rd": "SurpriseRD",
 }
 
 

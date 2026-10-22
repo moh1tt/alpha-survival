@@ -46,7 +46,7 @@ DelEqu,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:equity,as
 DelLTI,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:investmentsnc,assets",,
 EntMult,Accounting,-1,"Loughran and Wellman (2011), JFQA",computable,2,"sf1:ev,ebitda",,
 GrSaleToGrInv,Accounting,1,"Abarbanell and Bushee (1998), AR",computable,2,"sf1:revenue,inventory",,
-GrSaleToGrOverhead,Accounting,1,"Abarbanell and Bushee (1998), AR",computable,2,"sf1:revenue,sgna",,
+GrSaleToGrOverhead,Accounting,1,"Abarbanell and Bushee (1998), AR",computable,2,"sf1:revenue,sgna,rnd",,
 Investment,Accounting,-1,"Titman, Wei and Xie (2004), JFQA",computable,2,"sf1:capex,revenue",,
 Leverage,Accounting,1,"Bhandari (1988), JF",computable,2,sf1:liabilities; sep,,
 NOA,Accounting,-1,"Hirshleifer et al. (2004), JAE",computable,2,"sf1:assets,cashneq,liabilities,debtnc",,
@@ -62,13 +62,13 @@ RoE,Accounting,1,"Haugen and Baker (1996), JFE",computable,2,"sf1:netinc,equity"
 SP,Accounting,1,"Barbee, Mukherji and Raines (1996), FAJ",computable,2,sf1:revenue; sep,,
 ShareIss1Y,Accounting,-1,"Pontiff and Woodgate (2008), JF",computable,2,sf1:sharesbas; actions:split,,split-restated shares (Step 11)
 ShareIss5Y,Accounting,-1,"Daniel and Titman (2006), JF",computable,2,sf1:sharesbas; actions:split,,split-restated shares (Step 11)
-SurpriseRD,Accounting,1,"Eberhart, Maxwell and Siddique (2004), JF",computable,2,"sf1:rnd,revenue,assets",,
+SurpriseRD,Accounting,1,"Eberhart, Maxwell and Siddique (2004), JF",approximate,2,"sf1:rnd,revenue,assets",,Sharadar reports no R&D as 0 (not missing): non-R&D firms get 0 instead of dropping out
 TotalAccruals,Accounting,-1,"Richardson et al. (2005), JAE",approximate,2,"sf1:netinc,ncfo,ncfi,ncff,ncfcommon,ncfdiv,assets",,OSAP post-1989 cash-flow version; net (not gross) equity flows
 XFIN,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfcommon,ncfdiv,ncfdebt,assets",,
 cfp,Accounting,1,"Desai, Rajgopal, Venkatachalam (2004), AR",computable,2,sf1:ncfo; sep,,
 dNoa,Accounting,-1,"Hirshleifer, Hou, Teoh, Zhang (2004), JAE",computable,2,"sf1:assets,cashneq,liabilities,debt",,
-grcapx,Accounting,-1,"Anderson and Garcia-Feijoo (2006), JF",computable,2,sf1:capex,,
-grcapx3y,Accounting,-1,"Anderson and Garcia-Feijoo (2006), JF",computable,2,sf1:capex,,
+grcapx,Accounting,-1,"Anderson and Garcia-Feijoo (2006), JF",computable,2,"sf1:capex,ppnenet",,
+grcapx3y,Accounting,-1,"Anderson and Garcia-Feijoo (2006), JF",computable,2,"sf1:capex,ppnenet",,
 roaq,Accounting,1,"Balakrishnan, Bartov and Faurel (2010), JAE",computable,2,"sf1:netinc,assets (quarterly)",,
 tang,Accounting,1,"Hahn and Lee (2009), JF",approximate,2,"sf1:cashneq,receivables,inventory,ppnenet,assets; tickers:siccode",,net (not gross) PP&E; manufacturers by current SIC code
 MomRev,Price,1,"Chan and Ko (2006), JOIM",computable,2,sep:closeadj,,quintile combination of Mom6m and 36m return
