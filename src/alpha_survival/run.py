@@ -287,7 +287,9 @@ def portfolio_table(
                 ls = long_short_returns(oos, weighting=weighting, exit_groups=exit_groups)
                 gross = ls["long_short"]
                 weights = leg_weights(oos, weighting=weighting, exit_groups=exit_groups)
-                trade_rows, to = trades(weights), turnover(weights)
+                # Full calendar, so months that hold nothing still pay to sell the book.
+                months = pd.DatetimeIndex(oos["month_end"].unique())
+                trade_rows, to = trades(weights, months), turnover(weights, months)
                 net = {}
                 for c in COST_BPS:
                     net_ret = net_returns(gross, trading_costs(trade_rows, c), BORROW_BPS_PA)

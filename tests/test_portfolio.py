@@ -12,6 +12,7 @@ from alpha_survival.portfolio import (
     long_short_returns,
     max_drawdown,
     net_returns,
+    no_view_months,
     summarise,
     trades,
     trading_costs,
@@ -352,3 +353,56 @@ def test_banded_legs_ignore_future_months():
 def test_banded_legs_bad_band_raises():
     with pytest.raises(ValueError, match="exit_groups"):
         assign_legs_banded(random_panel(), n_groups=10, exit_groups=6)
+
+
+def three_months_with_no_view_in_feb():
+    # Jan and Mar rank A > B > C > D; in Feb the model has no view (all forecasts equal).
+    names = ["A", "B", "C", "D"]
+    jan = stocks_oos("2020-01-31", names, [4.0, 3.0, 2.0, 1.0], [0.1, 0.0, 0.0, -0.1])
+    feb = stocks_oos("2020-02-29", names, [0.5] * 4, [0.2, 0.0, 0.0, -0.2])
+    mar = stocks_oos("2020-03-31", names, [4.0, 3.0, 2.0, 1.0], [0.0] * 4)
+    return pd.concat([jan, feb, mar], ignore_index=True)
+
+
+def test_no_view_month_holds_nothing():
+    oos = three_months_with_no_view_in_feb()
+    assert no_view_months(oos).tolist() == [pd.Timestamp("2020-02-29")]
+    for legs in (assign_legs(oos, n_groups=2), assign_legs_banded(oos, n_groups=4, exit_groups=2)):
+        feb = oos["month_end"] == "2020-02-29"
+        assert (legs[feb] == 0).all()  # not long A, B by row order
+        assert (legs[~feb] != 0).any()
+
+
+def test_no_view_month_earns_zero_and_is_not_dropped():
+    # Feb's long-by-row-order would have earned +0.2 - (-0.2) = 0.4: that must not appear.
+    ls = long_short_returns(three_months_with_no_view_in_feb(), n_groups=2)
+    assert ls.loc["2020-02-29", "long_short"] == 0.0
+    assert ls.loc["2020-02-29", ["n_long", "n_short"]].tolist() == [0, 0]
+    assert ls.loc["2020-01-31", "long_short"] == pytest.approx(0.1)
+
+
+def test_no_view_month_without_outcomes_is_left_out():
+    oos = three_months_with_no_view_in_feb()
+    oos.loc[oos["month_end"] == "2020-02-29", TARGET] = np.nan
+    assert pd.Timestamp("2020-02-29") not in long_short_returns(oos, n_groups=2).index
+
+
+def test_no_view_month_sells_the_book_and_rebuys_after():
+    oos = three_months_with_no_view_in_feb()
+    months = pd.DatetimeIndex(oos["month_end"].unique())
+    weights = leg_weights(oos, n_groups=2)
+    t = turnover(weights, months)
+    assert t.tolist() == pytest.approx([2.0, 2.0, 2.0])  # buy, sell everything, buy again
+    # Without the calendar, Feb vanishes and Jan's book looks held straight into Mar.
+    assert turnover(weights).tolist() == pytest.approx([2.0, 0.0], abs=0.2)
+
+
+def test_banded_legs_restart_after_a_no_view_month():
+    # S1 was long in Jan; after the no-view Feb it is 2nd in Mar: inside the band, but
+    # nothing is held any more, so only the top stock enters.
+    jan = ten_stocks("2020-01-31", ["S1", *[n for n in TEN if n != "S1"]])
+    feb = stocks_oos("2020-02-29", TEN, [1.0] * 10, [0.0] * 10)
+    mar = ten_stocks("2020-03-31", TEN)
+    legs = banded_legs([jan, feb, mar])
+    assert legs[pd.Timestamp("2020-02-29")] == (set(), set())
+    assert legs[pd.Timestamp("2020-03-31")] == ({"S0"}, {"S9"})

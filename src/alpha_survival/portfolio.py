@@ -25,13 +25,23 @@ WEIGHTINGS = ("equal", "value")
 EXIT_GROUPS = 2
 
 
+def no_view_months(oos: pd.DataFrame) -> pd.DatetimeIndex:
+    """Months where every forecast is the same, e.g. a model that shrank all its
+    coefficients to zero. It ranks no stock above another, so it holds nothing:
+    breaking the tie by row order would trade on stock IDs instead.
+    """
+    distinct = oos.groupby("month_end")["pred"].nunique()
+    return pd.DatetimeIndex(distinct.index[distinct == 1])
+
+
 def assign_legs(oos: pd.DataFrame, n_groups: int = N_GROUPS) -> pd.Series:
     """+1 (long), -1 (short) or 0 (neither) per row; NaN where there is no forecast.
 
     Each month the k = count // n_groups highest forecasts go long and the k lowest
     go short, so both legs always hold the same number of stocks. Legs depend only
     on forecasts, never on outcomes: a stock whose next return turns out missing
-    still takes its slot. Ties are broken by row order.
+    still takes its slot. Ties are broken by row order, except in `no_view_months`,
+    where nothing is held.
     """
     by_month = oos.groupby("month_end")["pred"]
     rank = by_month.rank(method="first")
@@ -40,6 +50,7 @@ def assign_legs(oos: pd.DataFrame, n_groups: int = N_GROUPS) -> pd.Series:
     leg = pd.Series(0.0, index=oos.index).where(rank.notna())
     leg[rank <= k] = -1.0
     leg[rank > count - k] = 1.0
+    leg[oos["month_end"].isin(no_view_months(oos)) & rank.notna()] = 0.0
     return leg.rename("leg")
 
 
@@ -53,7 +64,8 @@ def assign_legs_banded(
     Stocks near the cut-off no longer flip in and out every month, so turnover
     falls; legs hold somewhat more names. Path-dependent, so months are processed
     in order; each month's legs use only that month's forecasts and the previous
-    month's legs. A stock with no forecast leaves its leg. `exit_groups=1` gives
+    month's legs. A stock with no forecast leaves its leg. In `no_view_months`
+    nothing is held, so the band restarts empty. `exit_groups=1` gives
     `assign_legs` exactly.
     """
     if not 1 <= exit_groups <= n_groups // 2:
@@ -61,7 +73,12 @@ def assign_legs_banded(
     leg = pd.Series(np.nan, index=oos.index, name="leg")
     held_long: set = set()
     held_short: set = set()
-    for _, month in oos.groupby("month_end", sort=True):
+    no_view = no_view_months(oos)
+    for month_end, month in oos.groupby("month_end", sort=True):
+        if month_end in no_view:
+            leg[month.index] = pd.Series(0.0, index=month.index).where(month["pred"].notna())
+            held_long, held_short = set(), set()
+            continue
         rank = month["pred"].rank(method="first")
         count = rank.count()
         k = max(count // n_groups, 1)
@@ -124,7 +141,8 @@ def long_short_returns(
 
     Inputs as for `leg_weights`. Columns: long, short, long_short (= long - short),
     n_long, n_short; indexed by formation month. Months missing either leg are
-    left out.
+    left out, except `no_view_months` with known outcomes: holding nothing earns 0,
+    and dropping those months would flatter the Sharpe.
     """
     rows = leg_weights(oos, n_groups, weighting, exit_groups)
     rows = rows.assign(w_ret=rows["weight"] * rows[TARGET])
@@ -139,11 +157,14 @@ def long_short_returns(
             "n_short": leg_n.get(-1.0),
         }
     ).dropna(subset=["long", "short"])
+    known = oos.loc[oos[TARGET].notna(), "month_end"].unique()
+    idle = no_view_months(oos).intersection(pd.DatetimeIndex(known))
+    out = out.reindex(out.index.union(idle), fill_value=0.0)
     out["long_short"] = out["long"] - out["short"]
     return out[["long", "short", "long_short", "n_long", "n_short"]]
 
 
-def trades(weights: pd.DataFrame) -> pd.DataFrame:
+def trades(weights: pd.DataFrame, months: pd.DatetimeIndex | None = None) -> pd.DataFrame:
     """Dollars traded per stock at each formation date: month_end, permaticker, traded.
 
     `weights` is the output of `leg_weights`. Over a month each holding drifts
@@ -153,13 +174,18 @@ def trades(weights: pd.DataFrame) -> pd.DataFrame:
     leaving the portfolio appears with its sale; one entering, with its purchase.
 
     The first month buys both legs from cash. Each leg is reset to $1 each month:
-    the cash from that reset is not counted as trading.
+    the cash from that reset is not counted as trading. `months` is the full
+    calendar of formation dates; pass it when some hold nothing (`no_view_months`),
+    so the book is sold going into them and bought again after. By default, the
+    months in `weights`.
     """
     w = weights.assign(signed=weights["leg"] * weights["weight"])
     leg_ret = (w["weight"] * w[TARGET]).groupby([w["month_end"], w["leg"]]).transform("sum")
     w = w.assign(drifted=w["signed"] * (1 + w[TARGET]) / (1 + leg_ret))
 
-    months = np.sort(w["month_end"].unique())
+    if months is None:
+        months = w["month_end"].unique()
+    months = np.sort(pd.DatetimeIndex(months).unique())
     next_month = dict(zip(months[:-1], months[1:], strict=True))
     held = w.assign(month_end=w["month_end"].map(next_month)).dropna(subset=["month_end"])
     out = w[["month_end", "permaticker", "signed"]].merge(
@@ -171,13 +197,13 @@ def trades(weights: pd.DataFrame) -> pd.DataFrame:
     return out[["month_end", "permaticker"]].assign(traded=traded)
 
 
-def turnover(weights: pd.DataFrame) -> pd.Series:
+def turnover(weights: pd.DataFrame, months: pd.DatetimeIndex | None = None) -> pd.Series:
     """Dollars traded each month per $1 long (and $1 short), both legs together.
 
     Sum of `trades` per month: 2 when both legs are bought from cash or fully
     replaced; 0 for identical names and weights through flat returns.
     """
-    t = trades(weights)
+    t = trades(weights, months)
     return t.groupby("month_end")["traded"].sum().rename("turnover")
 
 
