@@ -35,6 +35,7 @@ from alpha_survival.metrics import (
     rank_ic,
 )
 from alpha_survival.models import (
+    ElasticNetForecaster,
     Forecaster,
     HistoricalMean,
     LGBMForecaster,
@@ -104,6 +105,7 @@ def baseline_models() -> list[Forecaster]:
         SignalForecast("vol_3m"),
         SklearnForecaster(LinearRegression(), FEATURES, "ols"),
         SklearnForecaster(Ridge(alpha=1.0), FEATURES, "ridge"),
+        ElasticNetForecaster(FEATURES),
         LGBMForecaster(FEATURES),
     ]
 
@@ -211,7 +213,10 @@ def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
             "`asset_growth` (assets vs. 12 months earlier; expect a NEGATIVE IC) and "
             "`vol_3m` (std of daily returns over the last 3 months; expect a NEGATIVE IC); "
             "`ols` and `ridge` (alpha=1, untuned) on all seven rank-normalised to [-1, 1] "
-            "each month; `lgbm` (LightGBM gradient-boosted trees, fixed untuned settings: "
+            "each month; `enet` (ElasticNet, half Lasso half Ridge penalty, its strength "
+            "picked from 1e-5 to 0.1 by MSE on the latest 20% of each training window, then "
+            "refit on the whole window) on the same seven; `lgbm` (LightGBM gradient-boosted "
+            "trees, fixed untuned settings: "
             "depth 4, 200 trees, learning rate 0.05, each leaf >= 0.1% of training rows) "
             "on the same seven, so it can pick up nonlinear effects and interactions.",
             "- Splits: first 60 months train only, 12-month test blocks, model refit at the "
@@ -247,7 +252,7 @@ def run_all(
 
 
 # Models whose forecasts carry the directions they learned in training.
-LEARNED = {"ols", "lgbm"}
+LEARNED = {"ols", "enet", "lgbm"}
 # How legs are formed: plain deciles every month, or a holding band (enter in the
 # top/bottom decile, sell once out of the top/bottom EXIT_GROUPS deciles).
 LEG_RULES = {"decile": None, "band": EXIT_GROUPS}
@@ -258,7 +263,7 @@ def portfolio_table(
     panel: pd.DataFrame,
     keep_net: dict[tuple[str, str, str], pd.Series] | None = None,
 ) -> pd.DataFrame:
-    """Long-short performance for OLS, LightGBM and each signal: EW and VW, each
+    """Long-short performance for OLS, ElasticNet, LightGBM and each signal: EW and VW, each
     with plain decile legs and with a holding band (`LEG_RULES`).
 
     Gross stats, plus average turnover, net Sharpe at each flat `COST_BPS` and at
@@ -272,7 +277,7 @@ def portfolio_table(
     """
     caps = panel[["permaticker", "month_end", "market_cap"]]
     spread = estimated_spread_bps(panel).set_index(["permaticker", "month_end"])["cost_bps"]
-    candidates = [("ols", 1), ("lgbm", 1)] + [
+    candidates = [("ols", 1), ("enet", 1), ("lgbm", 1)] + [
         (f"signal_{c}", sign) for c, sign in PUBLISHED_SIGN.items()
     ]
     rows = []
@@ -353,8 +358,8 @@ def render_portfolios(table: pd.DataFrame) -> str:
             "- Each month: long the top 10% of stocks by forecast, short the bottom 10%, hold "
             "one month. Return = long leg - short leg (the short funds the long).",
             "- `direction`: signals trade the sign their original paper published (`high` = "
-            "buy high values), never the sign seen in our test period; `ols` and `lgbm` use "
-            "the signs they learned in each training window.",
+            "buy high values), never the sign seen in our test period; `ols`, `enet` and "
+            "`lgbm` use the signs they learned in each training window.",
             "- `equal`: every stock the same weight; `value`: weighted by market cap at "
             "formation. A big gap means the edge lives in small, costly-to-trade stocks.",
             "- `legs`: `decile` re-forms both legs from scratch each month; `band` buys "
