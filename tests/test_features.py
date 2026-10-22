@@ -770,3 +770,64 @@ def test_profitability_ratios_ignore_later_months_and_other_stocks():
     out = features.add_profitability_ratios(pd.concat([shocked, other], ignore_index=True))
     out = out[out["permaticker"] == 1].reset_index(drop=True)
     pd.testing.assert_frame_equal(out.loc[:14, cols], base.loc[:14, cols])
+
+
+def accrual_panel(n_months=14, permaticker=1, **overrides):
+    """Balance sheet constant over time unless a test changes month 13."""
+    base = {
+        "assetsc": 600.0,
+        "liabilitiesc": 300.0,
+        "debtc": 50.0,
+        "debtnc": 350.0,
+        "ncfi": -40.0,
+        "ncff": -60.0,
+    }
+    frame = profit_panel(n_months=n_months, permaticker=permaticker, **base)
+    for col, value in overrides.items():
+        frame[col] = value
+    return frame
+
+
+def test_accrual_signals_by_hand():
+    # accounting_row: assets 2000, liabilities 1200, cash 100, debt 400, netinc 50,
+    # ncfo 90, depamor 30; payout_panel: ncfdiv -20, ncfcommon -30.
+    panel = accrual_panel()
+    panel.loc[13, ["assetsc", "cashneq", "liabilitiesc", "debtc"]] = [700.0, 120.0, 330.0, 60.0]
+    panel.loc[13, ["assets", "liabilities"]] = [2200.0, 1300.0]
+    out = features.add_accrual_signals(panel).iloc[13]
+    assert out["accruals"] == pytest.approx((100 - 20 - (30 - 10) - 30) / 2100)
+    assert out["pct_acc"] == pytest.approx((50 - 90) / 50)
+    flows = 90 - 40 - 60
+    assert out["pct_tot_acc"] == pytest.approx((50 - flows + (-30) + (-20)) / 50)
+    assert out["total_accruals"] == pytest.approx((50 - flows - 30 - 20) / 2000)
+    assert out["noa"] == pytest.approx(((2200 - 120) - (1300 - 350)) / 2000)
+    noa_now, noa_before = (2200 - 120) - (1300 - 400), (2000 - 100) - (1200 - 400)
+    assert out["d_noa"] == pytest.approx((noa_now - noa_before) / 2000)
+
+
+def test_accrual_signals_need_a_row_twelve_months_earlier():
+    out = features.add_accrual_signals(accrual_panel())
+    lagged = ["accruals", "total_accruals", "noa", "d_noa"]
+    assert out[lagged].iloc[:12].isna().all().all()
+    assert out[lagged].iloc[12:].notna().all().all()
+    assert out[["pct_acc", "pct_tot_acc"]].notna().all().all()  # this filing only
+
+
+def test_pct_acc_zero_income_and_unclassified_balance_sheets():
+    zero = features.add_accrual_signals(accrual_panel(netinc=0.0)).iloc[-1]
+    assert zero["pct_acc"] == pytest.approx(-90 / 1e4)
+    assert np.isnan(zero["pct_tot_acc"])
+    bank = features.add_accrual_signals(accrual_panel(assetsc=np.nan, debtnc=np.nan)).iloc[-1]
+    assert np.isnan(bank["accruals"]) and np.isnan(bank["noa"])
+    assert np.isfinite(bank["d_noa"])  # total debt only
+
+
+def test_accrual_signals_ignore_later_months_and_other_stocks():
+    cols = ["accruals", "pct_acc", "pct_tot_acc", "total_accruals", "noa", "d_noa"]
+    base = features.add_accrual_signals(accrual_panel(n_months=20))
+    shocked = accrual_panel(n_months=20)
+    shocked.loc[shocked.index >= 15, ["assetsc", "netinc", "assets", "ncfo"]] = [9e9, -1, 1, 9e9]
+    other = accrual_panel(n_months=20, permaticker=2, assets=1.0, assetsc=1e12)
+    out = features.add_accrual_signals(pd.concat([shocked, other], ignore_index=True))
+    out = out[out["permaticker"] == 1].reset_index(drop=True)
+    pd.testing.assert_frame_equal(out.loc[:14, cols], base.loc[:14, cols])

@@ -49,7 +49,7 @@ GrSaleToGrInv,Accounting,1,"Abarbanell and Bushee (1998), AR",computable,2,"sf1:
 GrSaleToGrOverhead,Accounting,1,"Abarbanell and Bushee (1998), AR",computable,2,"sf1:revenue,sgna",,
 Investment,Accounting,-1,"Titman, Wei and Xie (2004), JFQA",computable,2,"sf1:capex,revenue",,
 Leverage,Accounting,1,"Bhandari (1988), JF",computable,2,sf1:liabilities; sep,,
-NOA,Accounting,-1,"Hirshleifer et al. (2004), JAE",computable,2,"sf1:assets,cashneq,debt,equity",,
+NOA,Accounting,-1,"Hirshleifer et al. (2004), JAE",computable,2,"sf1:assets,cashneq,liabilities,debtnc",,
 NetDebtFinance,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfdebt,assets",,Sharadar reports net debt issuance
 NetEquityFinance,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfcommon,assets",,Sharadar reports net equity issuance
 NumEarnIncrease,Accounting,1,"Loh and Warachka (2012), MS",computable,2,sf1:netinc (quarterly),,
@@ -63,10 +63,10 @@ SP,Accounting,1,"Barbee, Mukherji and Raines (1996), FAJ",computable,2,sf1:reven
 ShareIss1Y,Accounting,-1,"Pontiff and Woodgate (2008), JF",computable,2,sf1:sharesbas; actions:split,,split-restated shares (Step 11)
 ShareIss5Y,Accounting,-1,"Daniel and Titman (2006), JF",computable,2,sf1:sharesbas; actions:split,,split-restated shares (Step 11)
 SurpriseRD,Accounting,1,"Eberhart, Maxwell and Siddique (2004), JF",computable,2,"sf1:rnd,revenue,assets",,
-TotalAccruals,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:assetsc,cashneq,liabilitiesc,debtc,assets,liabilities,investmentsnc,debtnc,investmentsc",,
+TotalAccruals,Accounting,-1,"Richardson et al. (2005), JAE",approximate,2,"sf1:netinc,ncfo,ncfi,ncff,ncfcommon,ncfdiv,assets",,OSAP post-1989 cash-flow version; net (not gross) equity flows
 XFIN,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfcommon,ncfdiv,ncfdebt,assets",,
 cfp,Accounting,1,"Desai, Rajgopal, Venkatachalam (2004), AR",computable,2,sf1:ncfo; sep,,
-dNoa,Accounting,-1,"Hirshleifer, Hou, Teoh, Zhang (2004), JAE",computable,2,"sf1:assets,cashneq,debt,equity",,
+dNoa,Accounting,-1,"Hirshleifer, Hou, Teoh, Zhang (2004), JAE",computable,2,"sf1:assets,cashneq,liabilities,debt",,
 grcapx,Accounting,-1,"Anderson and Garcia-Feijoo (2006), JF",computable,2,sf1:capex,,
 grcapx3y,Accounting,-1,"Anderson and Garcia-Feijoo (2006), JF",computable,2,sf1:capex,,
 roaq,Accounting,1,"Balakrishnan, Bartov and Faurel (2010), JAE",computable,2,"sf1:netinc,assets (quarterly)",,
@@ -128,7 +128,7 @@ TrendFactor,Price,1,"Han, Zhou, Zhu (2016), JFE",computable,3,sep:closeadj,,movi
 betaVIX,Price,-1,"Ang et al. (2006), JF",computable,3,sep:closeadj,"fred:VIXCLS; kenfrench:mktrf,rf",
 FirmAge,Other,-1,"Barry and Brown (1984), JFE",approximate,1,sep:date,,"months since first month in our data (Dec 1997 start); firms listed by then keep that lower bound instead of OSAP's NaN"
 VolSD,Trading,-1,"Chordia, Subra, Anshuman (2001), JFE",computable,1,sep:volume,,"OSAP code applies no NYSE filter (SignalDoc mentions one); we follow the code"
-Accruals,Accounting,-1,"Sloan (1996), AR",approximate,2,"sf1:assetsc,cashneq,liabilitiesc,debtc,depamor",,no income-taxes-payable field: term dropped
+Accruals,Accounting,-1,"Sloan (1996), AR",approximate,2,"sf1:assetsc,cashneq,liabilitiesc,debtc,depamor,assets",,no income-taxes-payable field: term dropped
 BPEBM,Accounting,-1,"Penman, Richardson and Tuna (2007), JAR",approximate,2,"sf1:equity,cashneq,debt; sep",,no preferred arrears / treasury stock
 BookLeverage,Accounting,-1,"Fama and French (1992), JF",approximate,2,"sf1:assets,equity,taxliabilities",,deferred taxes ~ taxliabilities; no separate preferred stock
 CBOperProf,Accounting,1,"Ball et al. (2016), JFE",approximate,2,"sf1:revenue,cor,sgna,receivables,inventory,deferredrev,payables,assets; tickers:siccode",,no prepaid / accrued expenses fields; financials by current SIC code
@@ -141,7 +141,7 @@ InvestPPEInv,Accounting,-1,"Lyandres, Sun and Zhang (2008), RFS",approximate,2,"
 NetDebtPrice,Accounting,-1,"Penman, Richardson and Tuna (2007), JAR",approximate,2,"sf1:debt,cashneq,equity,assets,netinc; sep; tickers:siccode",,no preferred / arrears / treasury stock fields; financials by current SIC code
 NetPayoutYield,Accounting,1,"Boudoukh et al. (2007), JF",approximate,2,"sf1:ncfdiv,ncfcommon,equity; sep; tickers:siccode",,net (not gross) repurchases; no preferred; financials by current SIC code
 PayoutYield,Accounting,1,"Boudoukh et al. (2007), JF",approximate,2,"sf1:ncfdiv,ncfcommon,equity; sep; tickers:siccode",,net (not gross) repurchases; financials by current SIC code
-PctTotAcc,Accounting,-1,"Hafzalla, Lundholm, Van Winkle (2011), AR",approximate,2,"sf1:netinc,ncfcommon,ncfdiv,ncfo,ncfi,ncfdebt",,net (not gross) equity flows
+PctTotAcc,Accounting,-1,"Hafzalla, Lundholm, Van Winkle (2011), AR",approximate,2,"sf1:netinc,ncfcommon,ncfdiv,ncfo,ncfi,ncff",,net (not gross) equity flows
 ShareRepurchase,Accounting,1,"Ikenberry, Lakonishok, Vermaelen (1995), JFE",approximate,2,sf1:ncfcommon,,net equity flow < 0 as repurchase proxy
 Tax,Accounting,1,"Lev and Nissim (2004), AR",approximate,2,"sf1:taxexp,netinc",,no current/deferred split: total tax expense
 Frontier,Accounting,1,"Nguyen and Swanson (2009), JFQA",approximate,3,"sf1:equity,debtnc,assets,capex,revenue,rnd",,advertising regressor unavailable: dropped

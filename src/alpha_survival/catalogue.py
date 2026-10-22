@@ -93,6 +93,13 @@ FEATURE_ACRONYMS = {
     "op_leverage": "OPLeverage",
     "tax": "Tax",
     "tang": "tang",
+    # Step 57a: accruals and net operating assets
+    "accruals": "Accruals",
+    "pct_acc": "PctAcc",
+    "pct_tot_acc": "PctTotAcc",
+    "total_accruals": "TotalAccruals",
+    "noa": "NOA",
+    "d_noa": "dNoa",
 }
 
 

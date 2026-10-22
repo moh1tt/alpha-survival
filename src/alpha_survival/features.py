@@ -640,6 +640,78 @@ def add_profitability_ratios(panel: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+# PctAcc: when net income is exactly 0, divide by this instead (OSAP's 0.01 in
+# Compustat's millions; Sharadar reports units, so 10,000).
+ZERO_INCOME_SCALE = 1e4
+
+
+def add_accrual_signals(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `accruals`, `pct_acc`, `pct_tot_acc`, `total_accruals`, `noa`, `d_noa`.
+
+    Earnings made of accruals rather than cash, and bloated operating balance
+    sheets, predict LOWER returns (signs -1). OSAP's code mapped to Sharadar; each
+    ratio is within one company's own filings, so the currency cancels.
+    - `accruals`: (change in current assets - change in cash - (change in current
+      liabilities - change in short-term debt) - D&A) / average of assets now and
+      12 months ago (Accruals; Sloan 1996). No taxes-payable field: that term is out.
+    - `pct_acc`: (net income - operating cash flow) / |net income| (PctAcc; Hafzalla,
+      Lundholm & Van Winkle 2011). OSAP's balance-sheet fallback for missing cash
+      flow is not used: NaN.
+    - `pct_tot_acc`: (net income - operating, investing and financing cash flows +
+      net equity issued - dividends paid) / |net income| (PctTotAcc; same paper).
+      Sharadar's net issuance stands in for Compustat's gross issuance and buybacks.
+    - `total_accruals`: net income - (operating + investing + financing cash flows)
+      + net equity issued - dividends paid, over assets 12 months ago
+      (TotalAccruals; Richardson et al. 2005; OSAP's post-1989 cash-flow version).
+    - `noa`: (operating assets - operating liabilities) / assets 12 months ago, with
+      operating assets = assets - cash and operating liabilities = liabilities -
+      long-term debt (NOA; Hirshleifer et al. 2004). By assets = liabilities +
+      equity + minority interest, that is OSAP's assets - LT debt - minority
+      interest - equity exactly (deferred charges aside).
+    - `d_noa`: change over 12 months of (assets - cash) - (liabilities - total debt),
+      over assets 12 months ago (dNoa; same paper).
+    "12 months ago" is the stock's own row 12 calendar months earlier: no look-ahead.
+    """
+    panel = _sorted_by_stock(panel)
+
+    def change(column: str) -> pd.Series:
+        return panel[column] - _months_ago(panel, column, 12)
+
+    assets = panel["assets"].where(panel["assets"] > 0)
+    assets_before = _months_ago(panel, "assets", 12).where(lambda s: s > 0)
+    accruals = (
+        change("assetsc")
+        - change("cashneq")
+        - (change("liabilitiesc") - change("debtc"))
+        - panel["depamor"]
+    ) / ((assets + assets_before) / 2)
+
+    income = panel["netinc"]
+    scale = income.abs().where(income != 0, ZERO_INCOME_SCALE)
+    cash_flows = panel["ncfo"] + panel["ncfi"] + panel["ncff"]
+    # Sharadar: ncfcommon = issued - bought back; ncfdiv = -(dividends paid).
+    equity_flows = panel["ncfcommon"] + panel["ncfdiv"]
+    pct_tot_acc = (income - cash_flows + equity_flows) / income.abs().where(income != 0)
+
+    operating = (panel["assets"] - panel["cashneq"]) - (panel["liabilities"] - panel["debtnc"])
+    # dNoa as OSAP: missing debt or cash counts as 0, and all debt is financing.
+    operating_all = (panel["assets"] - panel["cashneq"].fillna(0)) - (
+        panel["liabilities"] - panel["debt"].fillna(0)
+    )
+    panel = _with(panel, _noa_all=operating_all)
+    d_noa = (operating_all - _months_ago(panel, "_noa_all", 12)) / assets_before
+
+    return _with(
+        panel.drop(columns="_noa_all"),
+        accruals=accruals,
+        pct_acc=(income - panel["ncfo"]) / scale,
+        pct_tot_acc=pct_tot_acc,
+        total_accruals=(income - cash_flows + equity_flows) / assets_before,
+        noa=operating / assets_before,
+        d_noa=d_noa,
+    )
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 
