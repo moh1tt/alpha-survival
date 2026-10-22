@@ -227,6 +227,60 @@ def add_daily_price_signals(panel: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+VOLTREND_MONTHS, VOLTREND_MIN = 60, 30  # VolumeTrend: >= 30 of the last 60 months
+
+
+def _rolling_slope(grid: pd.DataFrame, window: int, min_periods: int) -> pd.DataFrame:
+    """OLS slope of each column on time (months), over a rolling calendar window.
+
+    Closed form from rolling sums over the months that have a value:
+    slope = (n Sxy - Sx Sy) / (n Sxx - Sx^2).
+    """
+    seen = grid.notna()
+    t = pd.Series(np.arange(len(grid), dtype=float), index=grid.index)
+    x = seen.mul(t, axis=0).where(seen)
+
+    def total(values: pd.DataFrame) -> pd.DataFrame:
+        return values.rolling(window, min_periods=min_periods).sum()
+
+    n = seen.astype(float).rolling(window, min_periods=1).sum()
+    sx, sy, sxy, sxx = total(x), total(grid), total(x * grid), total(x * x)
+    denom = n * sxx - sx**2
+    return ((n * sxy - sx * sy) / denom.where(denom > 0)).where(n >= min_periods)
+
+
+def add_trend_price_age(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `volume_trend`, `price` and `firm_age` (OSAP's code, published sign -1 each).
+
+    - `volume_trend`: slope of monthly share volume on time over the last 60
+      calendar months (>= 30 with volume), divided by mean volume over the same
+      months (VolumeTrend; Haugen & Baker 1996). Volume is split-adjusted, so a
+      split is not a trend; OSAP's raw CRSP volume would jump at one.
+    - `price`: log of the unadjusted month-end close (Price; Blume & Husic 1973).
+    - `firm_age`: calendar months since the stock's first month in our data, counting
+      that month as 1 (FirmAge; Barry & Brown 1984). Our data start in Dec 1997, so
+      a stock already listed then gets a lower bound: still older than every later
+      listing, tied with the others listed then. (OSAP sets such stocks to NaN, which
+      in CRSP since 1926 is rare; for us it would be thousands of the oldest firms.)
+    Each uses this month and earlier only.
+    """
+    panel = _sorted_by_stock(panel)
+
+    volume = _calendar_grid(panel, "share_volume")
+    slope = _rolling_slope(volume, VOLTREND_MONTHS, VOLTREND_MIN)
+    mean = volume.rolling(VOLTREND_MONTHS, min_periods=VOLTREND_MIN).mean()
+    trend = slope / mean.where(mean > 0)
+
+    month = panel["month_end"].dt.year * 12 + panel["month_end"].dt.month
+    age = month - month.groupby(panel["permaticker"]).transform("min") + 1
+
+    return panel.assign(
+        volume_trend=_at_rows(trend, panel, volume),
+        price=np.log(panel["close_unadj"].where(panel["close_unadj"] > 0)),
+        firm_age=age.astype(float),
+    )
+
+
 def add_profitability(panel: pd.DataFrame) -> pd.DataFrame:
     """Add `gp_a`: gross profit (trailing twelve months) over total assets.
 

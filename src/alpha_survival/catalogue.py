@@ -63,6 +63,10 @@ FEATURE_ACRONYMS = {
     "illiquidity": "Illiquidity",
     "dol_vol": "DolVol",
     "vol_sd": "VolSD",
+    # Step 52: volume trend, price, firm age
+    "volume_trend": "VolumeTrend",
+    "price": "Price",
+    "firm_age": "FirmAge",
 }
 
 

@@ -27,6 +27,7 @@ from alpha_survival.features import (
     add_reversal,
     add_seasonality,
     add_size,
+    add_trend_price_age,
     add_value,
     add_volatility,
     rank_normalise,
@@ -69,7 +70,7 @@ REPORT_PATH = Path("reports/baselines.md")
 # off the test period would be data snooping. `vol_3m` (total volatility over 3
 # months) is not an OSAP signal: Ang, Hodrick, Xing & Zhang 2006.
 PUBLISHED_SIGN = {**published_signs(), "vol_3m": -1}
-# The original 7 features first (Steps 10-26), then the OSAP families (Steps 47-50).
+# The original 7 features first (Steps 10-26), then the OSAP families (Steps 47-52).
 ORIGINAL_FEATURES = ["mom_12_1", "log_mcap", "bm", "rev_1m", "gp_a", "asset_growth", "vol_3m"]
 RAW_FEATURES = ORIGINAL_FEATURES + [f for f in FEATURE_ACRONYMS if f not in ORIGINAL_FEATURES]
 FEATURES = [f"{c}_rank" for c in RAW_FEATURES]
@@ -90,8 +91,9 @@ SPREAD_ERA_LABELS = ["1997-2000", "2001-2008", "2009-2015", "2016-2026"]
 EARLIER_TRIALS = {
     "single-signal portfolios on the original 7 features, built in Steps 27-45": 28,
     "ols, enet, lgbm and combo portfolios on the original 7 features (Steps 27-45)": 16,
-    "ridge and rolling-window OLS, equal- or value-weighted, on 7 and on all features "
-    "(tried, never built)": 8,
+    "ols, enet, lgbm and combo portfolios on 28 features (Step 51)": 16,
+    "ridge and rolling-window OLS, equal- or value-weighted, on each feature set so far "
+    "(7, 28, 31; tried, never built)": 12,
 }
 UNREPORTED_TRIALS = sum(EARLIER_TRIALS.values())
 # Trial counts to show the deflated Sharpe ratio at, besides the honest count.
@@ -131,6 +133,7 @@ def prepare(panel: pd.DataFrame) -> pd.DataFrame:
     panel = add_reversal(add_value(add_size(add_momentum(panel))))
     panel = add_volatility(add_asset_growth(add_profitability(panel)))
     panel = add_daily_price_signals(add_seasonality(add_past_returns(panel)))
+    panel = add_trend_price_age(panel)
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
 

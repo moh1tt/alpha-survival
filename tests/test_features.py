@@ -492,3 +492,57 @@ def test_daily_price_signals_ignore_current_target_future_and_other_stocks():
     out = out[out["permaticker"] == 1].reset_index(drop=True)
     cols = ["max_ret", "return_skew", "high_52", "illiquidity", "dol_vol", "vol_sd"]
     pd.testing.assert_frame_equal(out.loc[:30, cols], base.loc[:30, cols])
+
+
+def test_trend_price_age_by_hand():
+    panel = daily_summary_panel(n_months=70).assign(close_unadj=lambda d: 20.0 + d.index)
+    panel["share_volume"] = 1000.0 + 10.0 * np.arange(70)  # exact linear trend
+    out = features.add_trend_price_age(panel)
+    t = 65  # window is months 6..65, mean volume 1000 + 10 * 35.5
+    assert out["volume_trend"].iloc[t] == pytest.approx(10.0 / (1000 + 10 * 35.5))
+    assert out["price"].iloc[t] == pytest.approx(np.log(20.0 + t))
+    assert list(out["firm_age"].iloc[:3]) == [1.0, 2.0, 3.0]
+
+
+def test_volume_trend_matches_least_squares_and_needs_30_months():
+    rng = np.random.default_rng(0)
+    panel = daily_summary_panel(n_months=70).assign(close_unadj=10.0)
+    panel["share_volume"] = rng.uniform(1e5, 1e6, 70)
+    out = features.add_trend_price_age(panel)
+    assert (
+        out["volume_trend"].iloc[:29].isna().all() and out["volume_trend"].iloc[29:].notna().all()
+    )
+    t = 50
+    window = panel["share_volume"].iloc[t - 50 : t + 1].to_numpy()  # 51 months, all < 60
+    slope = np.polyfit(np.arange(len(window)), window, 1)[0]
+    assert out["volume_trend"].iloc[t] == pytest.approx(slope / window.mean())
+
+
+def test_volume_trend_and_age_run_over_calendar_months():
+    # Drop months 10-14: the trend's time axis must still be calendar months, and
+    # age must count the missing months too.
+    panel = daily_summary_panel(n_months=70).assign(close_unadj=10.0)
+    panel["share_volume"] = 1000.0 + 10.0 * np.arange(70)
+    out = features.add_trend_price_age(panel.drop(index=range(10, 15)))
+    out = out.set_index(out["month_end"].dt.to_period("M"))
+    first = pd.Period("2020-01", "M")
+    # Volume is linear in calendar time, so the slope is exactly 10 despite the gap
+    # (counting rows instead would squeeze the axis and steepen it).
+    present = np.array([m for m in range(41) if not 10 <= m <= 14])
+    expected = 10.0 / (1000.0 + 10.0 * present).mean()
+    assert out.loc[first + 40, "volume_trend"] == pytest.approx(expected)
+    assert out.loc[first + 40, "firm_age"] == 41.0
+
+
+def test_trend_price_age_ignore_future_target_and_other_stocks():
+    base = features.add_trend_price_age(daily_summary_panel(n_months=70).assign(close_unadj=10.0))
+    shocked = daily_summary_panel(n_months=70).assign(close_unadj=10.0)
+    shocked.loc[shocked.index >= 41, ["share_volume", "close_unadj"]] = 9e9
+    shocked["fwd_ret"] = 99.0
+    other = daily_summary_panel(n_months=70, permaticker=2, start="2015-01-31").assign(
+        close_unadj=1.0, share_volume=1.0
+    )
+    out = features.add_trend_price_age(pd.concat([shocked, other], ignore_index=True))
+    out = out[out["permaticker"] == 1].reset_index(drop=True)
+    cols = ["volume_trend", "price", "firm_age"]
+    pd.testing.assert_frame_equal(out.loc[:40, cols], base.loc[:40, cols])

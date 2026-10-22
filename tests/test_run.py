@@ -56,6 +56,7 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["dret_sumcube"] = rng.normal(0, 1e-4, len(panel))
     panel["dret_max"] = rng.uniform(0, 0.1, len(panel))
     panel["close_split_adj"] = rng.uniform(5, 100, len(panel))
+    panel["close_unadj"] = panel["close_split_adj"]
     panel["close_max"] = panel["close_split_adj"] * rng.uniform(1, 1.2, len(panel))
     panel["illiq_n"] = 21
     panel["illiq_sum"] = 21 * rng.uniform(0, 1e-8, len(panel))
@@ -102,8 +103,9 @@ def test_evaluate_scores_each_model_the_right_way():
     empty = table.loc[signals, "n_forecasts"] == 0
     assert set(empty[empty].index) <= {f"signal_{c}" for c in long_lags}
     assert table.loc[empty[empty].index, "mean_ic"].isna().all()
-    # mom_rev is set only for extreme stocks: too few per month for an IC here.
-    scored = empty[~empty].index.drop("signal_mom_rev")
+    # mom_rev is set only for extreme stocks: too few per month for an IC here; every
+    # toy stock starts in the same month, so firm_age is a constant: nothing to rank.
+    scored = empty[~empty].index.drop(["signal_mom_rev", "signal_firm_age"])
     assert table.loc[scored, "ic_months"].gt(0).all()
     # Learned models forecast returns AND order stocks: both metrics.
     assert (
@@ -141,7 +143,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 28
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 31
 
 
 def test_prepare_ranks_among_investable_stocks_only():
@@ -210,7 +212,7 @@ def test_selection_table_deflates_every_portfolio_by_the_honest_trial_count():
     run_all(panel, keep=forecasts, min_train=12)
     portfolio_table(forecasts, panel, keep_net=net)
     assert len(net) == 16  # 4 models x 2 weightings x 2 leg rules
-    assert UNREPORTED_TRIALS == 52  # earlier portfolios stay trials
+    assert UNREPORTED_TRIALS == 72  # earlier portfolios stay trials
     table = selection_table(net)
     honest = f"dsr_n{16 + UNREPORTED_TRIALS}"
     assert list(table.columns) == [
