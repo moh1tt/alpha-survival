@@ -10,8 +10,10 @@ from alpha_survival.run import (
     UNREPORTED_TRIALS,
     baseline_models,
     evaluate,
+    penalty_table,
     portfolio_table,
     prepare,
+    render_penalties,
     render_portfolios,
     render_report,
     render_selection,
@@ -218,3 +220,21 @@ def test_selection_table_sharpe_matches_the_net_table():
     assert merged["sharpe_net_est_sel"].to_numpy() == pytest.approx(
         merged["sharpe_net_est"].to_numpy(), rel=0.05
     )
+
+
+def test_penalty_table_reports_each_enet_fold():
+    panel = prepare(make_panel())
+    forecasts, fitted = {}, {}
+    run_all(panel, keep=forecasts, fitted=fitted, min_train=12)
+    folds, oos = fitted["enet"], forecasts["enet"]
+    table = penalty_table(folds, oos)
+    assert len(table) == oos["fold"].nunique() == len(folds)
+    assert table["test_from"].iloc[0] == MONTHS[12].date()
+    assert list(table.columns[4:]) == RAW_FEATURES
+    for row, model in zip(table.itertuples(), folds, strict=True):
+        assert row.alpha == model.alpha_
+        assert row.n_kept == (model.estimator_.coef_ != 0).sum()
+        assert getattr(row, RAW_FEATURES[0]) == 1e4 * model.estimator_.coef_[0]
+    text = render_penalties(table)
+    assert "real data" in text.lower() and "| alpha |" in text
+    assert f"of {len(table)} refits kept no feature" in text

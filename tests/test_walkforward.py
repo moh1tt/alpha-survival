@@ -60,6 +60,15 @@ def test_each_fold_refits_on_its_own_training_months():
         assert np.allclose(out.loc[out["fold"] == fold, "pred"], expected)
 
 
+def test_fitted_copies_are_kept_one_per_fold_on_request():
+    model, fitted = HistoricalMean(), []
+    out = walk_forward_predict(make_panel(), model, fitted=fitted, **SPLITS)
+    assert len(fitted) == out["fold"].nunique() == 3
+    assert all(f is not model for f in fitted)
+    for fold, f in enumerate(fitted):  # the kept copy is the one that made that fold's forecasts
+        assert np.allclose(out.loc[out["fold"] == fold, "pred"], f.mean_)
+
+
 def test_original_model_is_never_fit():
     model = HistoricalMean()
     walk_forward_predict(make_panel(), model, **SPLITS)

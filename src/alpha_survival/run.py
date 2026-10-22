@@ -133,19 +133,24 @@ def evaluate(
     panel: pd.DataFrame,
     models: list[Forecaster],
     keep: dict[str, pd.DataFrame] | None = None,
+    fitted: dict[str, list[Forecaster]] | None = None,
     **split_kwargs,
 ) -> pd.DataFrame:
     """One row of out-of-sample scores per model.
 
     R^2 only for forecasts that are returns: a raw signal's scale is not a return.
     Rank IC only where forecasts differ across stocks: constant forecasts rank nothing.
-    If `keep` is given, each model's out-of-sample forecasts are stored in it by name.
+    If `keep` is given, each model's out-of-sample forecasts are stored in it by name;
+    if `fitted` is, each model's per-fold fitted copies.
     """
     rows = []
     for model in models:
-        oos = walk_forward_predict(panel, model, **split_kwargs)
+        folds: list[Forecaster] = []
+        oos = walk_forward_predict(panel, model, fitted=folds, **split_kwargs)
         if keep is not None:
             keep[model.name] = oos
+        if fitted is not None:
+            fitted[model.name] = folds
         scored = oos.dropna(subset=["fwd_ret", "pred"])
         window = split_kwargs.get("window")
         row = {
@@ -240,15 +245,68 @@ def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
 
 
 def run_all(
-    panel: pd.DataFrame, keep: dict[str, pd.DataFrame] | None = None, **split_kwargs
+    panel: pd.DataFrame,
+    keep: dict[str, pd.DataFrame] | None = None,
+    fitted: dict[str, list[Forecaster]] | None = None,
+    **split_kwargs,
 ) -> pd.DataFrame:
     """Every model with an expanding window, then the learning ones with a rolling one.
 
-    `keep` collects the expanding-window forecasts by model name (for portfolios).
+    `keep` collects the expanding-window forecasts by model name (for portfolios),
+    `fitted` the expanding-window per-fold fitted models.
     """
-    expanding = evaluate(panel, baseline_models(), keep=keep, **split_kwargs)
+    expanding = evaluate(panel, baseline_models(), keep=keep, fitted=fitted, **split_kwargs)
     rolling = evaluate(panel, rolling_models(), window=ROLLING_WINDOW, **split_kwargs)
     return pd.concat([expanding, rolling], ignore_index=True)
+
+
+def penalty_table(folds: list[ElasticNetForecaster], oos: pd.DataFrame) -> pd.DataFrame:
+    """What ElasticNet chose in each fold: penalty, features kept, coefficients.
+
+    Coefficients are in bps per month for a move from the median stock (rank 0) to
+    the top one (rank +1) on that feature, holding the others fixed. A fold that
+    keeps no feature forecasts the same return for every stock: it has no view.
+    """
+    span = oos.groupby("fold")["month_end"].agg(["min", "max"])
+    rows = []
+    for fold, model in enumerate(folds):
+        coef = model.estimator_.coef_
+        rows.append(
+            {
+                "test_from": span.loc[fold, "min"].date(),
+                "test_to": span.loc[fold, "max"].date(),
+                "alpha": model.alpha_,
+                "n_kept": int((coef != 0).sum()),
+                **{f: 1e4 * c for f, c in zip(RAW_FEATURES, coef, strict=True)},
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def render_penalties(table: pd.DataFrame) -> str:
+    no_view = table[table["n_kept"] == 0]
+    shown = table.assign(
+        alpha=table["alpha"].map("{:.0e}".format),
+        **{f: table[f].map(lambda v: "0" if v == 0 else f"{v:+.1f}") for f in RAW_FEATURES},
+    )
+    return "\n".join(
+        [
+            "## ElasticNet: what it chose each year",
+            "",
+            "**Real data. Chosen in training only (latest 20% of each training window); "
+            "the test year is never seen.**",
+            "",
+            "- One row per refit. `alpha`: penalty strength picked (1e-5 barely shrinks, 0.1 "
+            "zeroes everything). `n_kept`: features with a non-zero coefficient.",
+            "- Feature columns: coefficient in bps per month, from the median stock to the top "
+            "one on that feature (ranks -1 to +1), others held fixed. `0` = dropped.",
+            f"- {len(no_view)} of {len(table)} refits kept no feature: in validation, nothing "
+            "linear beat forecasting the average, so the model held no position that year.",
+            "",
+            markdown_table(shown),
+            "",
+        ]
+    )
 
 
 # Models whose forecasts carry the directions they learned in training.
@@ -517,8 +575,11 @@ def main(argv: list[str] | None = None) -> None:
 
     panel = prepare(load_panel())
     forecasts: dict[str, pd.DataFrame] = {}
-    table = run_all(panel, keep=forecasts)
+    fitted: dict[str, list[Forecaster]] = {}
+    table = run_all(panel, keep=forecasts, fitted=fitted)
     print(table.to_string(index=False))
+    penalties = penalty_table(fitted["enet"], forecasts["enet"])
+    print(penalties.to_string(index=False))
     net: dict[tuple[str, str, str], pd.Series] = {}
     portfolios = portfolio_table(forecasts, panel, keep_net=net)
     print(portfolios.to_string(index=False))
@@ -529,6 +590,7 @@ def main(argv: list[str] | None = None) -> None:
     report = "\n".join(
         [
             render_report(table, panel),
+            render_penalties(penalties),
             render_portfolios(portfolios),
             render_selection(selection, net),
             render_spreads(spread_table(panel)),

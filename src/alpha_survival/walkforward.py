@@ -18,14 +18,21 @@ from alpha_survival.models import TARGET, Forecaster
 KEYS = ["permaticker", "month_end"]
 
 
-def walk_forward_predict(panel: pd.DataFrame, model: Forecaster, **split_kwargs) -> pd.DataFrame:
+def walk_forward_predict(
+    panel: pd.DataFrame,
+    model: Forecaster,
+    fitted: list[Forecaster] | None = None,
+    **split_kwargs,
+) -> pd.DataFrame:
     """Return one out-of-sample forecast per panel row in a test month.
 
     Columns: permaticker, month_end, fold, fwd_ret, pred. `split_kwargs` go to
     `walk_forward_splits` (min_train, test_size, horizon, embargo, window, ...).
     `model` is never fit itself; each fold fits a deep copy, so no state leaks
     from one fold into the next. Training rows with a missing target are dropped;
-    test rows are all kept (a NaN `fwd_ret` is left for scoring to skip).
+    test rows are all kept (a NaN `fwd_ret` is left for scoring to skip). If
+    `fitted` is given, each fold's fitted copy is appended to it (position = fold),
+    so what a model chose in training (e.g. a penalty) can be inspected afterwards.
     """
     missing = [c for c in [*KEYS, TARGET] if c not in panel.columns]
     if missing:
@@ -39,10 +46,12 @@ def walk_forward_predict(panel: pd.DataFrame, model: Forecaster, **split_kwargs)
         walk_forward_splits(panel["month_end"], **split_kwargs)
     ):
         train = panel[panel["month_end"].isin(train_months) & panel[TARGET].notna()]
-        fitted = copy.deepcopy(model).fit(train)
+        fold_model = copy.deepcopy(model).fit(train)
+        if fitted is not None:
+            fitted.append(fold_model)
         for month in test_months:
             rows = by_month.get_group(month)
-            pred = fitted.predict(rows.drop(columns=TARGET))
+            pred = fold_model.predict(rows.drop(columns=TARGET))
             out.append(rows[[*KEYS, TARGET]].assign(fold=fold, pred=pred))
 
     result = pd.concat(out, ignore_index=True)
