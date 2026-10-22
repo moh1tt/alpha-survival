@@ -413,6 +413,53 @@ def add_value(panel: pd.DataFrame) -> pd.DataFrame:
     return panel.assign(bm=book / market)
 
 
+def _usd(panel: pd.DataFrame, column: str) -> pd.Series:
+    """A fundamental in US dollars. Sharadar's `fxusd` is reporting-currency units
+    per dollar (1 for USD filers), so dividing converts; market cap is in USD."""
+    return panel[column] / panel["fxusd"].where(panel["fxusd"] > 0)
+
+
+def add_valuation_ratios(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add nine accounting-to-price ratios (OSAP's code; signs in run.PUBLISHED_SIGN).
+
+    "Timely", like `bm`: the latest filing public at month_end (trailing twelve
+    months for flows, latest balance sheet for stocks) over that month-end's market
+    cap, not OSAP's Compustat annual values (EP: over market cap 6 months earlier).
+    Fundamentals are converted to USD (`_usd`). NaN if market cap <= 0.
+    - `am`: total assets / market cap (AM; Fama & French 1992).
+    - `sp`: revenue / market cap (SP; Barbee, Mukherji & Raines 1996).
+    - `leverage`: total liabilities / market cap (Leverage; Bhandari 1988).
+    - `cf`: (net income + depreciation and amortisation) / market cap (CF; Lakonishok,
+      Shleifer & Vishny 1994). OSAP: income before extraordinary items.
+    - `cfp`: operating cash flow / market cap (cfp; Desai, Rajgopal & Venkatachalam 2004).
+    - `rd`: R&D expense / market cap (RD; Chan, Lakonishok & Sougiannis 2001). Sharadar
+      reports no R&D as 0, where Compustat is often missing: non-R&D firms rank low
+      here instead of dropping out.
+    - `ep`: net income / market cap, NaN if negative (EP; Basu 1977).
+    - `cash_prod`: (market cap - total assets) / cash, NaN if cash <= 0 (CashProd;
+      Chandrashekar & Rao 2009).
+    - `ent_mult`: (market cap + debt - cash) / EBITDA, NaN if EBITDA or book equity is
+      negative (EntMult; Loughran & Wellman 2011).
+    Row's own columns only, all public at month_end: no look-ahead.
+    """
+    mcap = panel["market_cap"].where(panel["market_cap"] > 0)
+    assets, cash = _usd(panel, "assets"), _usd(panel, "cashneq")
+    earnings = _usd(panel, "netinc")
+    ebitda = _usd(panel, "ebitda")
+    ent_mult = (mcap + _usd(panel, "debt") - cash) / ebitda.where(ebitda != 0)
+    return panel.assign(
+        am=assets / mcap,
+        sp=_usd(panel, "revenue") / mcap,
+        leverage=_usd(panel, "liabilities") / mcap,
+        cf=(earnings + _usd(panel, "depamor")) / mcap,
+        cfp=_usd(panel, "ncfo") / mcap,
+        rd=_usd(panel, "rnd") / mcap,
+        ep=(earnings / mcap).where(earnings >= 0),
+        cash_prod=(mcap - assets) / cash.where(cash > 0),
+        ent_mult=ent_mult.where((ebitda >= 0) & (panel["equity"] >= 0)),
+    )
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 
@@ -423,11 +470,14 @@ def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank
     the same month: no look-ahead. Apply it to the rows that will be modelled
     (e.g. investable only), since the ranks depend on who else is in the month.
     """
-    by_month = panel.groupby("month_end")
+    # Only the columns needed: grouping the whole (wide, fragmented) panel is slow.
+    by_month = panel[["month_end", *columns]].groupby("month_end")
     added = {}
     for col in columns:
         rank = by_month[col].rank(method="average")
         count = by_month[col].transform("count")
         spread = (2 * (rank - 1) / (count - 1) - 1).where(count > 1)
         added[f"{col}{suffix}"] = spread.fillna(0.0)
-    return panel.assign(**added)
+    # One concat, not one insert per column (which fragments the frame).
+    kept = panel.drop(columns=[c for c in added if c in panel.columns])
+    return pd.concat([kept, pd.DataFrame(added, index=panel.index)], axis=1)

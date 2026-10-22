@@ -563,3 +563,67 @@ def test_trend_price_age_ignore_future_target_and_other_stocks():
     out = out[out["permaticker"] == 1].reset_index(drop=True)
     cols = ["volume_trend", "price", "firm_age"]
     pd.testing.assert_frame_equal(out.loc[:40, cols], base.loc[:40, cols])
+
+
+def accounting_row(**overrides):
+    """One stock-month with round accounting numbers (USD filer unless fxusd given)."""
+    row = {
+        "permaticker": 1,
+        "month_end": pd.Timestamp("2020-01-31"),
+        "market_cap": 1000.0,
+        "fxusd": 1.0,
+        "assets": 2000.0,
+        "liabilities": 1200.0,
+        "equity": 800.0,
+        "revenue": 500.0,
+        "netinc": 50.0,
+        "depamor": 30.0,
+        "ncfo": 90.0,
+        "rnd": 20.0,
+        "cashneq": 100.0,
+        "debt": 400.0,
+        "ebitda": 130.0,
+    }
+    return pd.DataFrame([row | overrides])
+
+
+def test_valuation_ratios_by_hand():
+    out = features.add_valuation_ratios(accounting_row()).iloc[0]
+    assert out["am"] == 2.0 and out["sp"] == 0.5 and out["leverage"] == 1.2
+    assert out["cf"] == pytest.approx(0.08) and out["cfp"] == pytest.approx(0.09)
+    assert out["rd"] == pytest.approx(0.02) and out["ep"] == pytest.approx(0.05)
+    assert out["cash_prod"] == pytest.approx((1000 - 2000) / 100)
+    assert out["ent_mult"] == pytest.approx((1000 + 400 - 100) / 130)
+
+
+def test_valuation_ratios_convert_foreign_filers_to_usd():
+    # Same company reporting in a currency worth half a dollar: every number doubles
+    # in local units, fxusd = 2, and every USD ratio is unchanged.
+    usd = features.add_valuation_ratios(accounting_row())
+    values = ["assets", "liabilities", "equity", "revenue", "netinc", "depamor", "ncfo"]
+    values += ["rnd", "cashneq", "debt", "ebitda"]
+    local = accounting_row(fxusd=2.0, **{c: 2 * accounting_row()[c].iloc[0] for c in values})
+    cols = ["am", "sp", "leverage", "cf", "cfp", "rd", "ep", "cash_prod", "ent_mult"]
+    pd.testing.assert_frame_equal(features.add_valuation_ratios(local)[cols], usd[cols])
+
+
+def test_valuation_ratio_exclusions():
+    loss = features.add_valuation_ratios(accounting_row(netinc=-10.0)).iloc[0]
+    assert np.isnan(loss["ep"]) and loss["cf"] == pytest.approx(0.02)  # CF keeps losses
+    assert np.isnan(features.add_valuation_ratios(accounting_row(ebitda=-5.0))["ent_mult"].iloc[0])
+    assert np.isnan(features.add_valuation_ratios(accounting_row(equity=-5.0))["ent_mult"].iloc[0])
+    assert np.isnan(features.add_valuation_ratios(accounting_row(cashneq=0.0))["cash_prod"].iloc[0])
+    no_cap = features.add_valuation_ratios(accounting_row(market_cap=0.0)).iloc[0]
+    assert no_cap[["am", "sp", "ep", "cfp"]].isna().all()
+    assert np.isnan(features.add_valuation_ratios(accounting_row(fxusd=np.nan))["am"].iloc[0])
+
+
+def test_valuation_ratios_use_only_their_own_row():
+    # Leakage test: fundamentals are already point-in-time per row (build_fundamentals),
+    # so each ratio must read nothing from other rows, e.g. a later filing.
+    rows = pd.concat([accounting_row(), accounting_row(month_end=pd.Timestamp("2020-02-29"))])
+    later = rows.assign(assets=[2000.0, 9e9], market_cap=[1000.0, 1.0], netinc=[50.0, -9e9])
+    cols = ["am", "sp", "leverage", "cf", "cfp", "rd", "ep", "cash_prod", "ent_mult"]
+    a = features.add_valuation_ratios(rows.reset_index(drop=True))
+    b = features.add_valuation_ratios(later.reset_index(drop=True))
+    pd.testing.assert_frame_equal(a.loc[:0, cols], b.loc[:0, cols])

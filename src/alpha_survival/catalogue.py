@@ -68,6 +68,16 @@ FEATURE_ACRONYMS = {
     "volume_trend": "VolumeTrend",
     "price": "Price",
     "firm_age": "FirmAge",
+    # Step 54: valuation ratios
+    "am": "AM",
+    "sp": "SP",
+    "leverage": "Leverage",
+    "cf": "CF",
+    "cfp": "cfp",
+    "rd": "RD",
+    "ep": "EP",
+    "cash_prod": "CashProd",
+    "ent_mult": "EntMult",
 }
 
 

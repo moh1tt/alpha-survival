@@ -46,6 +46,11 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["assets"] = panel["market_cap"] * rng.uniform(0.5, 3, len(panel))
     panel["gp"] = panel["assets"] * rng.normal(0.2, 0.1, len(panel))
     panel["cor"] = 1.0
+    panel["fxusd"] = 1.0
+    panel["equity"] = panel["equityusd"]
+    panel["liabilities"] = panel["assets"] - panel["equity"]
+    for col in ["revenue", "netinc", "depamor", "ncfo", "rnd", "cashneq", "debt", "ebitda"]:
+        panel[col] = panel["assets"] * rng.normal(0.1, 0.1, len(panel))
     panel["n_days"] = 21
     panel["dret_sum"] = rng.normal(0, 0.05, len(panel))
     panel["dret_sumsq"] = 21 * rng.uniform(0.0001, 0.002, len(panel))
@@ -145,7 +150,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 32
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 41
 
 
 def test_prepare_ranks_among_investable_stocks_only():
