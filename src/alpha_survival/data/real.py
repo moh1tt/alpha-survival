@@ -257,7 +257,10 @@ def add_delisting_returns(
     # penalise it once, using the latest.
     exits = exits.sort_values("date").drop_duplicates("permaticker", keep="last")
     exits["month_end"] = exits["date"].dt.to_period("M").dt.to_timestamp(how="end").dt.normalize()
-    exits["penalty"] = exits["exchange"].map(DELISTING_PENALTY).fillna(DEFAULT_DELISTING_PENALTY)
+    # astype(float): with no exits, pandas >= 3.1 keeps the empty map result as str.
+    exits["penalty"] = (
+        exits["exchange"].map(DELISTING_PENALTY).fillna(DEFAULT_DELISTING_PENALTY).astype(float)
+    )
 
     out = monthly.merge(
         exits[["permaticker", "month_end", "action", "penalty"]],
