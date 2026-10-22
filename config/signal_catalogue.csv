@@ -30,14 +30,14 @@ VolumeTrend,Trading,-1,"Haugen and Baker (1996), JFE",computable,1,sep:volume,,
 AM,Accounting,1,"Fama and French (1992), JF",computable,2,sf1:assets; sep,,
 BMdec,Accounting,1,"Fama and French (1992), JF",computable,2,sf1:equityusd; sep,,
 CF,Accounting,1,"Lakonishok, Shleifer, Vishny (1994), JF",computable,2,"sf1:netinc,depamor; sep",,
-Cash,Accounting,1,"Palazzo (2012), JFE",computable,2,"sf1:cashneq,assets (quarterly)",,
+Cash,Accounting,1,"Palazzo (2012), JFE",computable,2,"sf1:cashneq,assets (quarterly)",,"ranks identically to ART cash / assets (ART balance-sheet items are the latest quarter's)"
 CashProd,Accounting,-1,"Chandrashekar and Rao (2009), WP",computable,2,"sf1:cashneq,assets; sep",,
 ChAssetTurnover,Accounting,1,"Soliman (2008), AR",approximate,2,"sf1:revenue,assets,cashneq,investmentsc,investmentsnc,liabilities,debt",,"no other current/long-term asset and liability fields: net operating assets = (assets - cash - investments) - (liabilities - debt)"
 ChEQ,Accounting,-1,"Lockwood and Prombutr (2010), JFR",computable,2,sf1:equity,,
 ChInv,Accounting,-1,"Thomas and Zhang (2002), RAS",computable,2,"sf1:inventory,assets",,
 ChNNCOA,Accounting,-1,"Soliman (2008), AR",computable,2,"sf1:assets,assetsc,investmentsnc,liabilities,debtc,debtnc",,
 ChNWC,Accounting,-1,"Soliman (2008), AR",computable,2,"sf1:assetsc,cashneq,liabilitiesc,debtc,assets",,
-ChTax,Accounting,1,"Thomas and Zhang (2011), JAR",computable,2,"sf1:taxexp,assets (quarterly)",,
+ChTax,Accounting,1,"Thomas and Zhang (2011), JAR",computable,2,"sf1:taxexp (quarterly),assets",,
 CompositeDebtIssuance,Accounting,-1,"Lyandres, Sun and Zhang (2008), RFS",computable,2,sf1:debt,,
 DelCOA,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:assetsc,cashneq,assets",,
 DelCOL,Accounting,-1,"Richardson et al. (2005), JAE",computable,2,"sf1:liabilitiesc,debtc,assets",,
@@ -52,7 +52,7 @@ Leverage,Accounting,1,"Bhandari (1988), JF",computable,2,sf1:liabilities; sep,,
 NOA,Accounting,-1,"Hirshleifer et al. (2004), JAE",computable,2,"sf1:assets,cashneq,liabilities,debtnc",,
 NetDebtFinance,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfdebt,assets",,Sharadar reports net debt issuance
 NetEquityFinance,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfcommon,ncfdiv,assets",,Sharadar reports net equity issuance
-NumEarnIncrease,Accounting,1,"Loh and Warachka (2012), MS",computable,2,sf1:netinc (quarterly),,
+NumEarnIncrease,Accounting,1,"Loh and Warachka (2012), MS",approximate,2,sf1:netinc (quarterly),,"net income for income before extraordinary items; OSAP's rule kept: 0 when no fall within 8 quarters (incl. no history: ~12% of investable months)"
 OPLeverage,Accounting,1,"Novy-Marx (2011), ROF",computable,2,"sf1:sgna,rnd,cor,assets",,
 OperProf,Accounting,1,"Fama and French (2006), JFE",computable,2,"sf1:revenue,cor,sgna,rnd,intexp,equity; sep",,
 OperProfRD,Accounting,1,"Ball et al. (2016), JFE",approximate,2,"sf1:revenue,cor,sgna,assets; tickers:siccode",,financials by current SIC code
@@ -69,7 +69,7 @@ cfp,Accounting,1,"Desai, Rajgopal, Venkatachalam (2004), AR",computable,2,sf1:nc
 dNoa,Accounting,-1,"Hirshleifer, Hou, Teoh, Zhang (2004), JAE",computable,2,"sf1:assets,cashneq,liabilities,debt",,
 grcapx,Accounting,-1,"Anderson and Garcia-Feijoo (2006), JF",computable,2,"sf1:capex,ppnenet",,
 grcapx3y,Accounting,-1,"Anderson and Garcia-Feijoo (2006), JF",computable,2,"sf1:capex,ppnenet",,
-roaq,Accounting,1,"Balakrishnan, Bartov and Faurel (2010), JAE",computable,2,"sf1:netinc,assets (quarterly)",,
+roaq,Accounting,1,"Balakrishnan, Bartov and Faurel (2010), JAE",approximate,2,"sf1:netinc,assets (quarterly)",,net income for income before extraordinary items
 tang,Accounting,1,"Hahn and Lee (2009), JF",approximate,2,"sf1:cashneq,receivables,inventory,ppnenet,assets; tickers:siccode",,net (not gross) PP&E; manufacturers by current SIC code
 MomRev,Price,1,"Chan and Ko (2006), JOIM",computable,2,sep:closeadj,,quintile combination of Mom6m and 36m return
 MomVol,Price,1,"Lee and Swaminathan (2000), JF",approximate,2,"sep:closeadj,volume; sf1:sharesbas,sharefactor",,high-volume tercile by turnover (as in the paper) instead of raw share volume (OSAP): split-restated share volume is not comparable across stocks

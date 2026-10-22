@@ -138,6 +138,11 @@ FEATURE_ACRONYMS = {
     "zerotrade_6m": "zerotrade6M",
     "zerotrade_12m": "zerotrade12M",
     "mom_vol": "MomVol",
+    # Step 61b: quarterly
+    "roaq": "roaq",
+    "cash": "Cash",
+    "ch_tax": "ChTax",
+    "num_earn_increase": "NumEarnIncrease",
 }
 
 

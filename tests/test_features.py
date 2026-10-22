@@ -1153,3 +1153,77 @@ def test_turnover_signals_ignore_later_months_and_other_stocks():
     # Cross-sectional ranks (std_turn size cut, mom_vol) depend on the other stock.
     own = ["share_vol", "vol_mkt", "zerotrade_1m", "zerotrade_6m", "zerotrade_12m"]
     pd.testing.assert_frame_equal(out.loc[:35, own], base.loc[:35, own])
+
+
+QUARTERLY_SIGNALS = ["roaq", "cash", "ch_tax", "num_earn_increase"]
+
+
+def quarterly_panel(earnings, permaticker=1, **overrides):
+    """One quarterly filing per 3 months: quarter j's values on months 3j..3j+2."""
+    quarterly = np.repeat(np.asarray(earnings, dtype=float), 3)
+    n = len(quarterly)
+    columns = {
+        "permaticker": permaticker,
+        "month_end": pd.date_range("2015-01-31", periods=n, freq="ME"),
+        "netinc_q": quarterly,
+        "assets_q": 1000.0 + 10 * np.arange(n),
+        "cashneq_q": 100.0,
+        "taxexp_q": 5.0,
+        "assets": 1000.0,
+        "filing_date_q": pd.Timestamp("2014-12-15"),
+    }
+    return pd.DataFrame(columns | overrides)
+
+
+def test_quarterly_ratios_by_hand():
+    out = features.add_quarterly_signals(
+        quarterly_panel([10.0] * 8, taxexp_q=np.repeat([5.0] * 4 + [8.0] * 4, 3))
+    )
+    assert out["roaq"].iloc[20] == pytest.approx(10 / 1170)  # assets 3 months earlier
+    assert out["cash"].iloc[20] == pytest.approx(100 / 1200)
+    assert out["ch_tax"].iloc[12] == pytest.approx((8 - 5) / 1000)
+    assert out["roaq"].iloc[:3].isna().all() and out["ch_tax"].iloc[:12].isna().all()
+    assert (
+        features.add_quarterly_signals(quarterly_panel([1.0] * 4, assets_q=0.0))["cash"]
+        .isna()
+        .all()
+    )
+
+
+@pytest.mark.parametrize(
+    "earnings, expected",
+    [
+        # vs the same quarter a year earlier (4 quarters back): rises in the last 3.
+        ([5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6], 3),
+        ([5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4], 0),  # latest change < 0
+        ([5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6], 1),
+        # 8 rises then the change 8 quarters back <= 0: 8.
+        ([1, 1, 1, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9], 8),
+        # Rising for more than 8 quarters: OSAP's 0, not 8.
+        ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14], 0),
+    ],
+)
+def test_num_earn_increase_counts_consecutive_increases(earnings, expected):
+    out = features.add_quarterly_signals(quarterly_panel(earnings))
+    assert out["num_earn_increase"].iloc[-1] == expected
+
+
+def test_num_earn_increase_treats_a_missing_change_as_an_increase():
+    earnings = [5.0] * 8 + [np.nan, 6.0, 6.0]
+    out = features.add_quarterly_signals(quarterly_panel(earnings))
+    # Changes: 6-5 > 0, 6-5 > 0, NaN (counts as up), 5-5 = 0 -> 3.
+    assert out["num_earn_increase"].iloc[-1] == 3
+    none = features.add_quarterly_signals(quarterly_panel([5.0] * 4, filing_date_q=pd.NaT))
+    assert none["num_earn_increase"].isna().all()
+
+
+def test_quarterly_signals_ignore_later_months_and_other_stocks():
+    earnings = np.arange(1.0, 13.0)
+    base = features.add_quarterly_signals(quarterly_panel(earnings))
+    shocked = quarterly_panel(earnings)
+    cols = ["netinc_q", "assets_q", "cashneq_q", "taxexp_q", "assets"]
+    shocked.loc[shocked.index >= 30, cols] = [-9e9, 1.0, 9e9, 9e9, 1.0]
+    other = quarterly_panel(-earnings, permaticker=2, assets_q=1.0)
+    out = features.add_quarterly_signals(pd.concat([shocked, other], ignore_index=True))
+    out = out[out["permaticker"] == 1].reset_index(drop=True)
+    pd.testing.assert_frame_equal(out.loc[:29, QUARTERLY_SIGNALS], base.loc[:29, QUARTERLY_SIGNALS])

@@ -1079,6 +1079,55 @@ def add_turnover_signals(panel: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+EARN_INCREASE_QUARTERS = 8  # NumEarnIncrease: counts up to 8 quarters back
+
+
+def add_quarterly_signals(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `roaq`, `cash`, `ch_tax`, `num_earn_increase` from quarterly filings
+    (the `_q` columns of data.real.add_quarterly_fundamentals; OSAP's code).
+
+    Compustat -> Sharadar: ibq -> netinc_q (net income: Sharadar has no income
+    before extraordinary items), atq -> assets_q, cheq -> cashneq_q, txtq -> taxexp_q.
+    - `roaq`: quarterly net income / quarterly assets 3 months earlier (roaq;
+      Balakrishnan, Bartov & Faurel 2010).
+    - `cash`: cash / assets in the latest quarter, assets > 0 (Cash; Palazzo 2012).
+    - `ch_tax`: quarterly tax expense minus that 12 months earlier, over (annual)
+      assets 12 months earlier (ChTax; Thomas & Zhang 2011).
+    - `num_earn_increase`: how many quarters in a row, up to 8, quarterly earnings
+      beat the same quarter a year earlier (NumEarnIncrease; Loh & Warachka 2012).
+      As OSAP: the count runs back in 3-month steps to the first change <= 0, and a
+      missing change counts as an increase; with no change <= 0 within 8 quarters
+      it is 0, not 8. NaN without a quarterly filing.
+    Earlier values are the stock's own rows then (`_months_ago`): no look-ahead.
+    """
+    panel = _sorted_by_stock(panel)
+
+    def ago(values: str | pd.Series, months: int) -> pd.Series:
+        return _months_ago(panel, values, months)
+
+    assets_q = panel["assets_q"].where(panel["assets_q"] > 0)
+    earnings = panel["netinc_q"]
+    change = earnings - ago(earnings, 12)
+
+    # A change at quarter lag k counts as an increase if it is > 0 or missing.
+    count = pd.Series(0.0, index=panel.index)
+    run = pd.Series(True, index=panel.index)  # quarters 0..k-1 all increases
+    for k in range(1, EARN_INCREASE_QUARTERS + 1):
+        before = change if k == 1 else ago(change, 3 * (k - 1))
+        run &= (before > 0) | before.isna()
+        at_k = ago(change, 3 * k)
+        count[run & (at_k <= 0)] = float(k)
+
+    return _with(
+        panel,
+        roaq=earnings / ago(assets_q, 3),
+        cash=panel["cashneq_q"] / assets_q,
+        ch_tax=(panel["taxexp_q"] - ago("taxexp_q", 12))
+        / ago(panel["assets"].where(panel["assets"] > 0), 12),
+        num_earn_increase=count.where(panel["filing_date_q"].notna()),
+    )
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 

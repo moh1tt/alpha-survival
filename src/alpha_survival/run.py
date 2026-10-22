@@ -30,6 +30,7 @@ from alpha_survival.features import (
     add_past_returns,
     add_profitability,
     add_profitability_ratios,
+    add_quarterly_signals,
     add_reversal,
     add_seasonality,
     add_size,
@@ -78,7 +79,7 @@ REPORT_PATH = Path("reports/baselines.md")
 # off the test period would be data snooping. `vol_3m` (total volatility over 3
 # months) is not an OSAP signal: Ang, Hodrick, Xing & Zhang 2006.
 PUBLISHED_SIGN = {**published_signs(), "vol_3m": -1}
-# The original 7 features first (Steps 10-26), then the OSAP families (Steps 47-60).
+# The original 7 features first (Steps 10-26), then the OSAP families (Steps 47-61).
 ORIGINAL_FEATURES = ["mom_12_1", "log_mcap", "bm", "rev_1m", "gp_a", "asset_growth", "vol_3m"]
 RAW_FEATURES = ORIGINAL_FEATURES + [f for f in FEATURE_ACRONYMS if f not in ORIGINAL_FEATURES]
 FEATURES = [f"{c}_rank" for c in RAW_FEATURES]
@@ -145,7 +146,7 @@ def prepare(panel: pd.DataFrame) -> pd.DataFrame:
     panel = add_profitability_ratios(add_book_payout_debt_ratios(panel))
     panel = add_balance_sheet_changes(add_accrual_signals(panel))
     panel = add_financing_signals(add_investment_growth(panel))
-    panel = add_turnover_signals(panel)
+    panel = add_quarterly_signals(add_turnover_signals(panel))
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
 
