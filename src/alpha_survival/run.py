@@ -79,7 +79,7 @@ REPORT_PATH = Path("reports/baselines.md")
 # off the test period would be data snooping. `vol_3m` (total volatility over 3
 # months) is not an OSAP signal: Ang, Hodrick, Xing & Zhang 2006.
 PUBLISHED_SIGN = {**published_signs(), "vol_3m": -1}
-# The original 7 features first (Steps 10-26), then the OSAP families (Steps 47-61).
+# The original 7 features first (Steps 10-26), then the OSAP families (Steps 47-62).
 ORIGINAL_FEATURES = ["mom_12_1", "log_mcap", "bm", "rev_1m", "gp_a", "asset_growth", "vol_3m"]
 RAW_FEATURES = ORIGINAL_FEATURES + [f for f in FEATURE_ACRONYMS if f not in ORIGINAL_FEATURES]
 FEATURES = [f"{c}_rank" for c in RAW_FEATURES]

@@ -488,7 +488,8 @@ def _financial(panel: pd.DataFrame) -> pd.Series:
 
 
 def add_book_payout_debt_ratios(panel: pd.DataFrame) -> pd.DataFrame:
-    """Add `bm_dec`, `payout_yield`, `net_payout_yield`, `net_debt_price`, `ebm`, `bpebm`.
+    """Add `bm_dec`, `payout_yield`, `net_payout_yield`, `net_debt_price`, `ebm`, `bpebm`,
+    `book_leverage`.
 
     OSAP's code, on the latest public filing (USD, `_usd`); signs in run.PUBLISHED_SIGN.
     - `bm_dec`: book equity over the market cap of last December, or of the December
@@ -507,6 +508,11 @@ def add_book_payout_debt_ratios(panel: pd.DataFrame) -> pd.DataFrame:
     - `ebm`: (book + cash - debt) over (market cap + cash - debt): book-to-market
       of the operating business (EBM; Penman et al. 2007).
     - `bpebm`: book-to-price minus `ebm`, the leverage part of B/M (BPEBM).
+    - `book_leverage`: assets / (book equity + deferred taxes), NaN if the
+      denominator is 0, negative kept as in OSAP (BookLeverage; Fama & French 1992).
+      Book equity falls back to assets - liabilities; Sharadar's `taxliabilities`
+      (all tax liabilities, not only deferred) stands in for txditc, 0 if missing.
+      A ratio within one filing: currency cancels.
     OSAP's preferred-stock and treasury-stock adjustments are left out.
     Financials use today's SIC code (approximate). Past market caps are this
     stock's own earlier rows, all public by month_end: no look-ahead.
@@ -548,6 +554,8 @@ def add_book_payout_debt_ratios(panel: pd.DataFrame) -> pd.DataFrame:
     net_debt = ((debt - cash) / mcap).where(~financial & complete & (log_bm > cut))
 
     ebm = (book + cash - debt) / (mcap + cash - debt)
+    book_equity = panel["equity"].fillna(panel["assets"] - panel["liabilities"])
+    book_equity = book_equity + panel["taxliabilities"].fillna(0)
     return _with(
         panel,
         bm_dec=book / dec_cap,
@@ -556,6 +564,7 @@ def add_book_payout_debt_ratios(panel: pd.DataFrame) -> pd.DataFrame:
         net_debt_price=net_debt,
         ebm=ebm,
         bpebm=book / mcap - ebm,
+        book_leverage=panel["assets"] / book_equity.where(book_equity != 0),
     )
 
 

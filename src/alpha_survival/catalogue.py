@@ -143,6 +143,8 @@ FEATURE_ACRONYMS = {
     "cash": "Cash",
     "ch_tax": "ChTax",
     "num_earn_increase": "NumEarnIncrease",
+    # Step 62: book leverage
+    "book_leverage": "BookLeverage",
 }
 
 

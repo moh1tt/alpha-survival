@@ -638,6 +638,7 @@ def payout_panel(n_months=30, permaticker=1, start="2020-01-31", **overrides):
     frame["ncfdiv"] = -20.0  # dividends paid (an outflow)
     frame["ncfcommon"] = -30.0  # net buyback
     frame["sic_code"] = 3571.0
+    frame["taxliabilities"] = 50.0
     for col, value in overrides.items():
         frame[col] = value
     return frame
@@ -680,6 +681,19 @@ def test_ebm_bpebm_and_net_debt_by_hand():
     assert out["bpebm"] == pytest.approx(800 / 1000 - ebm)
 
 
+def test_book_leverage_by_hand():
+    out = features.add_book_payout_debt_ratios(payout_panel(n_months=1))
+    assert out["book_leverage"].iloc[0] == pytest.approx(2000 / (800 + 50))
+    no_equity = features.add_book_payout_debt_ratios(payout_panel(n_months=1, equity=np.nan))
+    assert no_equity["book_leverage"].iloc[0] == pytest.approx(2000 / (2000 - 1200 + 50))
+    no_tax = features.add_book_payout_debt_ratios(payout_panel(n_months=1, taxliabilities=np.nan))
+    assert no_tax["book_leverage"].iloc[0] == pytest.approx(2000 / 800)
+    zero = features.add_book_payout_debt_ratios(payout_panel(n_months=1, equity=-50.0))
+    assert zero["book_leverage"].isna().all()
+    negative = features.add_book_payout_debt_ratios(payout_panel(n_months=1, equity=-150.0))
+    assert negative["book_leverage"].iloc[0] == pytest.approx(-20.0)  # kept, as OSAP
+
+
 def test_net_debt_price_only_for_the_top_three_fifths_of_book_to_market():
     stocks = [payout_panel(n_months=1, permaticker=k, equity=100.0 * (k + 1)) for k in range(5)]
     out = features.add_book_payout_debt_ratios(pd.concat(stocks, ignore_index=True))
@@ -689,7 +703,7 @@ def test_net_debt_price_only_for_the_top_three_fifths_of_book_to_market():
 
 
 def test_book_payout_debt_ratios_ignore_later_months_and_other_stocks():
-    cols = ["bm_dec", "payout_yield", "net_payout_yield", "ebm", "bpebm"]
+    cols = ["bm_dec", "payout_yield", "net_payout_yield", "ebm", "bpebm", "book_leverage"]
     base = features.add_book_payout_debt_ratios(payout_panel(n_months=36))
     shocked = payout_panel(n_months=36)
     shocked.loc[shocked.index >= 30, ["market_cap", "equity", "ncfdiv"]] = [1.0, -9e9, 9e9]

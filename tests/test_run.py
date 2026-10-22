@@ -78,6 +78,7 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["dollar_volume"] = panel["share_volume"] * panel["close_split_adj"]
     panel["investable"] = True
     panel["n_zero_volume"] = rng.integers(0, 3, len(panel))
+    panel["taxliabilities"] = panel["assets"] * rng.uniform(0, 0.05, len(panel))
     for col in ["netinc", "assets", "cashneq", "taxexp"]:  # quarterly block, suffix _q
         panel[f"{col}_q"] = panel[col] * rng.uniform(0.2, 0.3, len(panel))
     panel["filing_date_q"] = panel["month_end"] - pd.Timedelta(days=30)
@@ -174,7 +175,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 98
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 99
 
 
 def test_prepare_ranks_among_investable_stocks_only():
