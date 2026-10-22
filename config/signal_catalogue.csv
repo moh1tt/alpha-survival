@@ -51,7 +51,7 @@ Investment,Accounting,-1,"Titman, Wei and Xie (2004), JFQA",computable,2,"sf1:ca
 Leverage,Accounting,1,"Bhandari (1988), JF",computable,2,sf1:liabilities; sep,,
 NOA,Accounting,-1,"Hirshleifer et al. (2004), JAE",computable,2,"sf1:assets,cashneq,liabilities,debtnc",,
 NetDebtFinance,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfdebt,assets",,Sharadar reports net debt issuance
-NetEquityFinance,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfcommon,assets",,Sharadar reports net equity issuance
+NetEquityFinance,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfcommon,ncfdiv,assets",,Sharadar reports net equity issuance
 NumEarnIncrease,Accounting,1,"Loh and Warachka (2012), MS",computable,2,sf1:netinc (quarterly),,
 OPLeverage,Accounting,1,"Novy-Marx (2011), ROF",computable,2,"sf1:sgna,rnd,cor,assets",,
 OperProf,Accounting,1,"Fama and French (2006), JFE",computable,2,"sf1:revenue,cor,sgna,rnd,intexp,equity; sep",,
@@ -60,8 +60,8 @@ PctAcc,Accounting,-1,"Hafzalla, Lundholm, Van Winkle (2011), AR",computable,2,"s
 RD,Accounting,1,"Chan, Lakonishok and Sougiannis (2001), JF",computable,2,sf1:rnd; sep,,
 RoE,Accounting,1,"Haugen and Baker (1996), JFE",computable,2,"sf1:netinc,equity",,
 SP,Accounting,1,"Barbee, Mukherji and Raines (1996), FAJ",computable,2,sf1:revenue; sep,,
-ShareIss1Y,Accounting,-1,"Pontiff and Woodgate (2008), JF",computable,2,sf1:sharesbas; actions:split,,split-restated shares (Step 11)
-ShareIss5Y,Accounting,-1,"Daniel and Titman (2006), JF",computable,2,sf1:sharesbas; actions:split,,split-restated shares (Step 11)
+ShareIss1Y,Accounting,-1,"Pontiff and Woodgate (2008), JF",approximate,2,"sf1:sharesbas,sharefactor",,split-restated shares (Step 11) from filings: change only when a new filing lands (CRSP: monthly)
+ShareIss5Y,Accounting,-1,"Daniel and Titman (2006), JF",approximate,2,"sf1:sharesbas,sharefactor",,split-restated shares (Step 11) from filings: change only when a new filing lands (CRSP: monthly)
 SurpriseRD,Accounting,1,"Eberhart, Maxwell and Siddique (2004), JF",approximate,2,"sf1:rnd,revenue,assets",,Sharadar reports no R&D as 0 (not missing): non-R&D firms get 0 instead of dropping out
 TotalAccruals,Accounting,-1,"Richardson et al. (2005), JAE",approximate,2,"sf1:netinc,ncfo,ncfi,ncff,ncfcommon,ncfdiv,assets",,OSAP post-1989 cash-flow version; net (not gross) equity flows
 XFIN,Accounting,-1,"Bradshaw, Richardson, Sloan (2006), JAE",computable,2,"sf1:ncfcommon,ncfdiv,ncfdebt,assets",,
@@ -132,7 +132,7 @@ Accruals,Accounting,-1,"Sloan (1996), AR",approximate,2,"sf1:assetsc,cashneq,lia
 BPEBM,Accounting,-1,"Penman, Richardson and Tuna (2007), JAR",approximate,2,"sf1:equity,cashneq,debt; sep",,no preferred arrears / treasury stock
 BookLeverage,Accounting,-1,"Fama and French (1992), JF",approximate,2,"sf1:assets,equity,taxliabilities",,deferred taxes ~ taxliabilities; no separate preferred stock
 CBOperProf,Accounting,1,"Ball et al. (2016), JFE",approximate,2,"sf1:revenue,cor,sgna,receivables,inventory,deferredrev,payables,assets; tickers:siccode",,no prepaid / accrued expenses fields; financials by current SIC code
-DebtIssuance,Accounting,-1,"Spiess and Affleck-Graves (1999), JFE",approximate,2,sf1:ncfdebt,,net (not gross) debt issuance > 0
+DebtIssuance,Accounting,-1,"Spiess and Affleck-Graves (1999), JFE",approximate,2,"sf1:ncfdebt,equity; sep:closeunadj",,net (not gross) debt issuance > 0
 DelFINL,Accounting,-1,"Richardson et al. (2005), JAE",approximate,2,"sf1:debt,assets",,no separate preferred stock field
 DelNetFin,Accounting,1,"Richardson et al. (2005), JAE",approximate,2,"sf1:investmentsc,investmentsnc,debt,assets",,no separate preferred stock
 EBM,Accounting,1,"Penman, Richardson and Tuna (2007), JAR",approximate,2,"sf1:equity,cashneq,debt; sep",,no deferred charges / preferred arrears / treasury stock

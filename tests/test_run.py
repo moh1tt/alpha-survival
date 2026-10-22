@@ -53,9 +53,11 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     cols = ["revenue", "netinc", "depamor", "ncfo", "rnd", "cashneq", "debt", "ebitda"]
     cols += ["sgna", "intexp", "taxexp", "receivables", "inventory", "deferredrev", "payables"]
     cols += ["assetsc", "liabilitiesc", "debtc", "debtnc", "ncfi", "ncff"]
-    cols += ["investmentsc", "investmentsnc", "capex"]
+    cols += ["investmentsc", "investmentsnc", "capex", "ncfdebt"]
     for col in [*cols, "ppnenet", "ncfdiv", "ncfcommon"]:
         panel[col] = panel["assets"] * rng.normal(0.1, 0.1, len(panel))
+    panel["sharesbas"] = panel["market_cap"] * rng.uniform(0.01, 0.02, len(panel))
+    panel["sharefactor"] = 1.0
     panel["n_days"] = 21
     panel["dret_sum"] = rng.normal(0, 0.05, len(panel))
     panel["dret_sumsq"] = 21 * rng.uniform(0.0001, 0.002, len(panel))
@@ -114,6 +116,7 @@ def test_evaluate_scores_each_model_the_right_way():
     # Signals whose lags reach past the 40-month toy panel are blank, not an error.
     long_lags = ["mom_season_6y", "mom_season_11y", "mom_season_16y", "mom_offseason_6y"]
     long_lags += ["mom_offseason_11y", "mom_offseason_16y"]
+    long_lags += ["composite_debt_issuance", "share_iss_5y"]  # 60 and 65 months
     empty = table.loc[signals, "n_forecasts"] == 0
     assert set(empty[empty].index) <= {f"signal_{c}" for c in long_lags}
     assert table.loc[empty[empty].index, "mean_ic"].isna().all()
@@ -167,7 +170,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 79
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 87
 
 
 def test_prepare_ranks_among_investable_stocks_only():

@@ -1004,3 +1004,64 @@ def test_investment_growth_ignores_later_months_and_other_stocks():
     out = features.add_investment_growth(pd.concat([shocked, other], ignore_index=True))
     out = out[out["permaticker"] == 1].reset_index(drop=True)
     pd.testing.assert_frame_equal(out.loc[:37, GROWTH_SIGNALS], base.loc[:37, GROWTH_SIGNALS])
+
+
+FINANCING_SIGNALS = [
+    "composite_debt_issuance",
+    "debt_issuance",
+    "net_debt_finance",
+    "net_equity_finance",
+    "xfin",
+    "share_iss_1y",
+    "share_iss_5y",
+    "share_repurchase",
+]
+
+
+def financing_panel(n_months=70, permaticker=1, **overrides):
+    defaults = {"ncfdebt": 40.0, "sharesbas": 100.0, "sharefactor": 1.0}
+    return growth_panel(n_months=n_months, permaticker=permaticker, **(defaults | overrides))
+
+
+def test_financing_signals_by_hand():
+    # accounting_row: assets 2000, debt 400, equity 800, market cap 1000 (+10/month);
+    # payout_panel: ncfdiv -20, ncfcommon -30 (a net buyback).
+    m = np.arange(70, dtype=float)
+    out = features.add_financing_signals(financing_panel(debt=400 + m, sharesbas=100 + m)).iloc[69]
+    assert out["composite_debt_issuance"] == pytest.approx(np.log(469 / 409))
+    assert out["debt_issuance"] == 1.0 and out["share_repurchase"] == 1.0
+    assert out["net_debt_finance"] == pytest.approx(40 / 2000)
+    assert out["net_equity_finance"] == pytest.approx((-30 - 20) / 2000)
+    assert out["xfin"] == pytest.approx((-30 - 20 + 40) / 2000)
+    assert out["share_iss_1y"] == pytest.approx((163 - 151) / 151)  # months 63 vs 51
+    assert out["share_iss_5y"] == pytest.approx((164 - 104) / 104)  # months 64 vs 4
+
+
+def test_financing_signals_need_their_history():
+    out = features.add_financing_signals(financing_panel())
+    assert out["composite_debt_issuance"].iloc[:60].isna().all()
+    assert out["share_iss_1y"].iloc[:18].isna().all() and out["share_iss_1y"].iloc[18] == 0
+    assert out["share_iss_5y"].iloc[:65].isna().all() and out["share_iss_5y"].iloc[65] == 0
+    assert out["net_debt_finance"].iloc[:12].isna().all()
+
+
+def test_financing_exclusions():
+    issuer = features.add_financing_signals(financing_panel(ncfcommon=50.0, ncfdebt=-10.0))
+    assert (issuer["share_repurchase"] == 0).all() and (issuer["debt_issuance"] == 0).all()
+    huge = features.add_financing_signals(financing_panel(ncfdebt=5000.0))
+    assert huge["net_debt_finance"].isna().all()  # |flow| > avg assets
+    no_book = features.add_financing_signals(financing_panel(equity=-1.0))
+    assert no_book["debt_issuance"].isna().all()
+    no_cash_flow = features.add_financing_signals(financing_panel(ncfcommon=np.nan))
+    assert no_cash_flow["share_repurchase"].isna().all()
+
+
+def test_financing_signals_ignore_later_months_and_other_stocks():
+    m = np.arange(70, dtype=float)
+    base = features.add_financing_signals(financing_panel(debt=400 + m, sharesbas=100 + m))
+    shocked = financing_panel(debt=400 + m, sharesbas=100 + m)
+    shocked.loc[shocked.index >= 66, ["debt", "sharesbas", "ncfdebt", "assets"]] = [1, 9e9, 9e9, 1]
+    other = financing_panel(permaticker=2, debt=1e12, sharesbas=1.0)
+    out = features.add_financing_signals(pd.concat([shocked, other], ignore_index=True))
+    out = out[out["permaticker"] == 1].reset_index(drop=True)
+    pd.testing.assert_frame_equal(out.loc[:65, FINANCING_SIGNALS], base.loc[:65, FINANCING_SIGNALS])

@@ -913,6 +913,77 @@ def add_investment_growth(panel: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+MAX_FINANCE_TO_ASSETS = 1.0  # Net*Finance: OSAP drops |flow / avg assets| above 1
+# ShareIss: share counts `first` and `last` months back (OSAP's lags, after Pontiff &
+# Woodgate 2008 and Daniel & Titman 2006).
+SHARE_ISSUE_LAGS = {"share_iss_1y": (18, 6), "share_iss_5y": (65, 5)}
+
+
+def add_financing_signals(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `composite_debt_issuance`, `debt_issuance`, `net_debt_finance`,
+    `net_equity_finance`, `xfin`, `share_iss_1y`, `share_iss_5y`, `share_repurchase`.
+
+    Firms raising outside money (debt or equity) tend to earn LESS afterwards;
+    buyers-back more (signs in run.PUBLISHED_SIGN). OSAP's code mapped to Sharadar,
+    whose cash-flow statement gives only NET flows: `ncfdebt` (debt issued -
+    repaid), `ncfcommon` (equity issued - bought back) and `ncfdiv` (-dividends).
+    - `composite_debt_issuance`: log(total debt / total debt 60 months ago)
+      (CompositeDebtIssuance; Lyandres, Sun & Zhang 2008).
+    - `debt_issuance`: 1 if net debt issued > 0, else 0 (DebtIssuance; Spiess &
+      Affleck-Graves 1999; OSAP: gross issuance); NaN where log book-to-market is
+      undefined (book <= 0 or missing), as in OSAP.
+    - `net_debt_finance`: net debt issued / avg assets (NetDebtFinance; Bradshaw,
+      Richardson & Sloan 2006).
+    - `net_equity_finance`: (net equity issued - dividends) / avg assets
+      (NetEquityFinance; same). Both NaN beyond +-`MAX_FINANCE_TO_ASSETS`.
+    - `xfin`: (net equity + net debt issued - dividends) / assets (XFIN; same).
+    - `share_iss_1y`, `share_iss_5y`: % change in shares outstanding between the
+      `SHARE_ISSUE_LAGS` months (ShareIss1Y, ShareIss5Y). Shares from the latest
+      filing (`sharesbas` x `sharefactor`), which Sharadar restates for every
+      split, so both ends are on one split basis; they change only when a new
+      filing lands, where CRSP's count is monthly.
+    - `share_repurchase`: 1 if net equity flow < 0 (a net buyback), else 0; NaN
+      without a cash-flow statement (ShareRepurchase; Ikenberry, Lakonishok &
+      Vermaelen 1995; OSAP: gross buybacks > 0).
+    Ratios within one company's filings: currency cancels. Earlier values are the
+    stock's own rows then (`_months_ago`): no look-ahead.
+    """
+    panel = _sorted_by_stock(panel)
+
+    def ago(values: str | pd.Series, months: int) -> pd.Series:
+        return _months_ago(panel, values, months)
+
+    assets = panel["assets"].where(panel["assets"] > 0)
+    avg_assets = (assets + ago(assets, 12)) / 2
+    debt = panel["debt"].where(panel["debt"] > 0)
+    net_debt, net_equity = panel["ncfdebt"], panel["ncfcommon"]
+    equity_flow = net_equity + panel["ncfdiv"]  # issued - bought back - dividends
+
+    def capped(ratio: pd.Series) -> pd.Series:
+        return ratio.where(ratio.abs() <= MAX_FINANCE_TO_ASSETS)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log_bm = np.log(panel["equity"] / panel["market_cap"])
+    debt_issuance = (net_debt > 0).astype(float).where(np.isfinite(log_bm))
+
+    shares = (panel["sharesbas"] * panel["sharefactor"]).where(panel["sharesbas"] > 0)
+    share_issues = {}
+    for name, (first, last) in SHARE_ISSUE_LAGS.items():
+        before = ago(shares, first)
+        share_issues[name] = (ago(shares, last) - before) / before
+
+    return _with(
+        panel,
+        composite_debt_issuance=np.log(debt / ago(debt, 60)),
+        debt_issuance=debt_issuance,
+        net_debt_finance=capped(net_debt / avg_assets),
+        net_equity_finance=capped(equity_flow / avg_assets),
+        xfin=(equity_flow + net_debt) / assets,
+        **share_issues,
+        share_repurchase=(net_equity < 0).astype(float).where(net_equity.notna()),
+    )
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 

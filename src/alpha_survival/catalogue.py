@@ -121,6 +121,15 @@ FEATURE_ACRONYMS = {
     "gr_sale_to_gr_inv": "GrSaleToGrInv",
     "gr_sale_to_gr_overhead": "GrSaleToGrOverhead",
     "surprise_rd": "SurpriseRD",
+    # Step 59: financing
+    "composite_debt_issuance": "CompositeDebtIssuance",
+    "debt_issuance": "DebtIssuance",
+    "net_debt_finance": "NetDebtFinance",
+    "net_equity_finance": "NetEquityFinance",
+    "xfin": "XFIN",
+    "share_iss_1y": "ShareIss1Y",
+    "share_iss_5y": "ShareIss5Y",
+    "share_repurchase": "ShareRepurchase",
 }
 
 
