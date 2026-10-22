@@ -737,3 +737,73 @@ def test_market_cap_does_not_change_when_a_later_split_restates_history():
 def test_market_cap_is_nan_without_shares():
     out = real.add_market_cap(cap_panel([10.0, 10.0, 10.0], [float("nan"), 0.0, 1_000.0]))
     assert out["market_cap"].isna().tolist() == [True, True, False]
+
+
+CS_C = 3 - 2 * np.sqrt(2)
+
+
+def cs_by_hand(high_1, low_1, high_2, low_2):
+    beta = np.log(high_1 / low_1) ** 2 + np.log(high_2 / low_2) ** 2
+    gamma = np.log(max(high_1, high_2) / min(low_1, low_2)) ** 2
+    alpha = (np.sqrt(2 * beta) - np.sqrt(beta)) / CS_C - np.sqrt(gamma / CS_C)
+    return max(2 * (np.exp(alpha) - 1) / (1 + np.exp(alpha)), 0.0)
+
+
+def test_corwin_schultz_by_hand():
+    # Two identical 99-101 days: no extra range over two days, so it is all spread.
+    # alpha works out to log(101/99) and S = 2 (101/99 - 1) / (1 + 101/99) = 2%.
+    s = real.corwin_schultz_spread(ar_daily([101.0, 101.0], [99.0, 99.0], [100.0, 100.0]))
+    assert np.isnan(s.iloc[0])  # first day: no previous day
+    assert s.iloc[1] == pytest.approx(0.02)
+    # A second day trading higher adds volatility: the estimate falls (floored at 0).
+    s = real.corwin_schultz_spread(ar_daily([101.0, 103.0], [99.0, 101.0], [100.0, 102.0]))
+    assert s.iloc[1] == pytest.approx(cs_by_hand(101.0, 99.0, 103.0, 101.0))
+    assert s.iloc[1] == 0.0
+
+
+def test_corwin_schultz_shifts_range_after_overnight_gap():
+    # Day 1 closes at 98, below day 2's low of 99: day 2's 99-101 range is shifted
+    # down to 98-100 before pairing, so the gap is not read as spread.
+    daily = ar_daily([100.0, 101.0], [97.0, 99.0], [98.0, 100.0])
+    s = real.corwin_schultz_spread(daily)
+    assert s.iloc[1] == pytest.approx(cs_by_hand(100.0, 98.0, 100.0, 97.0))
+
+
+def test_corwin_schultz_no_trade_day_reuses_last_range():
+    # Day 2 has no volume and high == low: it takes day 1's 99-101 range (close 100
+    # inside it), so the pair looks like two identical days.
+    daily = ar_daily([101.0, 100.0], [99.0, 100.0], [100.0, 100.0], [1e3, 0.0])
+    assert real.corwin_schultz_spread(daily).iloc[1] == pytest.approx(0.02)
+    # Close above the kept range: the range moves up to end at the close.
+    daily = ar_daily([101.0, 102.0], [99.0, 102.0], [100.0, 102.0], [1e3, 0.0])
+    assert real.corwin_schultz_spread(daily).iloc[1] == pytest.approx(
+        cs_by_hand(101.0, 99.0, 102.0, 100.0)
+    )
+
+
+def test_corwin_schultz_drops_bad_ranges_and_other_stocks():
+    daily = pd.concat(
+        [
+            ar_daily([101.0, 900.0, 101.0], [99.0, 100.0, 99.0], [100.0, 100.0, 100.0]),
+            ar_daily([101.0, 101.0], [99.0, 99.0], [100.0, 100.0], permaticker=2),
+        ],
+        ignore_index=True,
+    )
+    s = real.corwin_schultz_spread(daily)
+    assert s.iloc[1:3].isna().all()  # high / low = 9 > 8: both pairs touching it
+    assert np.isnan(s.iloc[3])  # stock 2's first day is not paired with stock 1
+    assert s.iloc[4] == pytest.approx(0.02)
+
+
+def test_monthly_corwin_schultz_terms_file_each_pair_under_its_later_day():
+    stocks = price_rows(
+        "AAA",
+        ["2024-01-30", "2024-01-31", "2024-02-01"],
+        [100.0, 100.0, 100.0],
+        high=[101.0, 101.0, 101.0],
+        low=[99.0, 99.0, 99.0],
+    )
+    out = real.build_monthly_returns(stocks, master_for("AAA")).set_index("month_end")
+    for month in ["2024-01-31", "2024-02-29"]:  # one pair each
+        row = out.loc[pd.Timestamp(month)]
+        assert row["cs_n"] == 1 and row["cs_sum"] == pytest.approx(0.02)

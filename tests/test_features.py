@@ -426,6 +426,8 @@ def daily_summary_panel(n_months=40, permaticker=1, start="2020-01-31"):
             "illiq_n": 20.0,
             "dollar_volume": 1e6 * (i + 1),
             "share_volume": 1e4 * (i + 1) ** 2,
+            "cs_sum": 0.2 * (i + 1),
+            "cs_n": 20.0,
         }
     )
 
@@ -442,6 +444,14 @@ def test_daily_price_signals_by_hand():
     assert out["dol_vol"].iloc[t] == pytest.approx(np.log(1e6 * (t - 1)))  # month t-2
     months = np.arange(max(0, t - 35), t + 1)  # 36-month window, clipped at the first month
     assert out["vol_sd"].iloc[t] == pytest.approx(np.std(1e4 * (months + 1.0) ** 2, ddof=1))
+    assert out["bid_ask_spread"].iloc[t] == pytest.approx(0.01 * (t + 1))
+
+
+def test_bid_ask_spread_needs_12_daily_estimates():
+    panel = daily_summary_panel(n_months=2).assign(cs_n=[11.0, 12.0], cs_sum=[1.1, 1.2])
+    out = features.add_daily_price_signals(panel)
+    assert np.isnan(out["bid_ask_spread"].iloc[0])
+    assert out["bid_ask_spread"].iloc[1] == pytest.approx(0.1)
 
 
 def test_return_skew_by_hand_and_needs_15_days():
@@ -483,14 +493,21 @@ def test_daily_price_signals_ignore_current_target_future_and_other_stocks():
     base = features.add_daily_price_signals(daily_summary_panel())
     shocked = daily_summary_panel()
     later = shocked.index >= 31
-    shocked.loc[later, ["dret_max", "close_max", "illiq_sum", "dollar_volume", "share_volume"]] = (
-        9e9
-    )
+    summaries = ["dret_max", "close_max", "illiq_sum", "dollar_volume", "share_volume", "cs_sum"]
+    shocked.loc[later, summaries] = 9e9
     shocked["fwd_ret"] = 99.0
     other = daily_summary_panel(permaticker=2).assign(close_max=1e9, share_volume=1.0)
     out = features.add_daily_price_signals(pd.concat([shocked, other], ignore_index=True))
     out = out[out["permaticker"] == 1].reset_index(drop=True)
-    cols = ["max_ret", "return_skew", "high_52", "illiquidity", "dol_vol", "vol_sd"]
+    cols = [
+        "max_ret",
+        "return_skew",
+        "high_52",
+        "illiquidity",
+        "dol_vol",
+        "vol_sd",
+        "bid_ask_spread",
+    ]
     pd.testing.assert_frame_equal(out.loc[:30, cols], base.loc[:30, cols])
 
 

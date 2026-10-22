@@ -57,6 +57,8 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["dret_max"] = rng.uniform(0, 0.1, len(panel))
     panel["close_split_adj"] = rng.uniform(5, 100, len(panel))
     panel["close_unadj"] = panel["close_split_adj"]
+    panel["cs_n"] = 20
+    panel["cs_sum"] = 20 * rng.uniform(0, 0.02, len(panel))
     panel["close_max"] = panel["close_split_adj"] * rng.uniform(1, 1.2, len(panel))
     panel["illiq_n"] = 21
     panel["illiq_sum"] = 21 * rng.uniform(0, 1e-8, len(panel))
@@ -143,7 +145,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 31
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 32
 
 
 def test_prepare_ranks_among_investable_stocks_only():

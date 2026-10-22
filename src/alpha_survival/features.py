@@ -176,10 +176,12 @@ HIGH52_MONTHS = 12  # High52: this month and the 11 before
 ILLIQ_MONTHS = 12  # Illiquidity: 12 monthly Amihud means, all required
 DOLVOL_LAG = 2  # DolVol: dollar volume two months back
 VOLSD_MONTHS, VOLSD_MIN = 36, 24  # VolSD: std of monthly volume, >= 24 of 36 months
+MIN_CS_DAYS = 12  # BidAskSpread: OSAP requires 12 daily estimates in the month
 
 
 def add_daily_price_signals(panel: pd.DataFrame) -> pd.DataFrame:
-    """Add `max_ret`, `return_skew`, `high_52`, `illiquidity`, `dol_vol`, `vol_sd`.
+    """Add `max_ret`, `return_skew`, `high_52`, `illiquidity`, `dol_vol`, `vol_sd`,
+    `bid_ask_spread`.
 
     Built from `data.real.DAILY_SUMMARY_COLUMNS`, so only days up to each
     month_end. Windows run over calendar months (`_calendar_grid`).
@@ -194,6 +196,8 @@ def add_daily_price_signals(panel: pd.DataFrame) -> pd.DataFrame:
     - `dol_vol`: log of dollars traded two months back (DolVol). OSAP uses monthly
       volume x month-end price; we sum the actual daily dollars.
     - `vol_sd`: std of monthly share volume over 36 months, >= 24 required (VolSD).
+    - `bid_ask_spread`: mean of the month's daily Corwin-Schultz estimates, NaN with
+      fewer than `MIN_CS_DAYS` (BidAskSpread; Corwin & Schultz 2012).
     """
     panel = _sorted_by_stock(panel)
 
@@ -224,6 +228,7 @@ def add_daily_price_signals(panel: pd.DataFrame) -> pd.DataFrame:
         illiquidity=_at_rows(illiq_12m, panel, illiq),
         dol_vol=_at_rows(dol_vol, panel, dollars),
         vol_sd=_at_rows(vol_sd, panel, volume),
+        bid_ask_spread=(panel["cs_sum"] / panel["cs_n"]).where(panel["cs_n"] >= MIN_CS_DAYS),
     )
 
 

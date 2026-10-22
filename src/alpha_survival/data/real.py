@@ -121,6 +121,65 @@ def abdi_ranaldo_product(daily: pd.DataFrame) -> pd.Series:
     return product.where(traded & prev_traded).rename("ar_product")
 
 
+# Corwin & Schultz: a high/low ratio above this is a bad print, not a trading range.
+CS_MAX_RANGE = 8.0
+
+
+def corwin_schultz_spread(daily: pd.DataFrame) -> pd.Series:
+    """Each day's Corwin & Schultz (2012) two-day bid-ask spread estimate, floored at 0.
+
+    A day's high-low range holds both volatility and the bid-ask spread. Volatility
+    grows with the time window, while the spread doesn't, so comparing two one-day
+    ranges (beta) with the two-day range (gamma) separates them:
+
+        alpha = (sqrt(2 beta) - sqrt(beta)) / (3 - 2 sqrt 2) - sqrt(gamma / (3 - 2 sqrt 2))
+        S = 2 (e^alpha - 1) / (1 + e^alpha)
+
+    Follows Corwin's code as used by OSAP for its BidAskSpread signal:
+    - A day with high == low, no volume or a non-positive price has no range of its
+      own; it reuses the stock's last valid range, shifted to contain its close.
+    - Ranges with high / low > `CS_MAX_RANGE` are dropped.
+    - If the previous close is outside today's range, today's range is shifted to
+      it, so an overnight move is not read as spread.
+    The estimate is filed under the later day of each pair, so it uses no price
+    after that day. NaN when either day lacks a range. Not a trading-cost estimate
+    here (rejected for that in favour of `abdi_ranaldo_product`): a signal only.
+
+    `daily`: permaticker, high, low, close, volume, sorted by permaticker then date.
+    Split-adjusted prices, so a split between the two days can't fake a range.
+    """
+    by_stock = daily["permaticker"]
+    low, high, close = daily["low"], daily["high"], daily["close"].abs()
+    valid = (low < high) & (low > 0) & (high > 0) & (close > 0) & (daily["volume"] > 0)
+    # Last valid range up to today (today's own if valid).
+    kept_low = low.where(valid).groupby(by_stock).ffill()
+    kept_high = high.where(valid).groupby(by_stock).ffill()
+    below, above = close < kept_low, close > kept_high
+    low = low.where(valid, kept_low.mask(below, close).mask(above, kept_low + close - kept_high))
+    high = high.where(
+        valid, kept_high.mask(below, kept_high - (kept_low - close)).mask(above, close)
+    )
+    bad = (low <= 0) | (high / low > CS_MAX_RANGE)
+    low, high = low.mask(bad), high.mask(bad)
+
+    prev_low, prev_high = low.groupby(by_stock).shift(1), high.groupby(by_stock).shift(1)
+    prev_close = close.groupby(by_stock).shift(1)
+    # Overnight adjustment: shift today's range to the previous close if outside it.
+    up = (prev_close < low) & (prev_close > 0)  # gapped up: previous close below today's low
+    down = (prev_close > high) & (prev_close > 0)
+    t_low = low.mask(up, prev_close).mask(down, low + (prev_close - high))
+    t_high = high.mask(up, high - (low - prev_close)).mask(down, prev_close)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        beta = np.log(t_high / t_low) ** 2 + np.log(prev_high / prev_low) ** 2
+        gamma = np.log(np.fmax(t_high, prev_high) / np.fmin(t_low, prev_low)) ** 2
+        const = 3 - 2 * np.sqrt(2)
+        alpha = (np.sqrt(2 * beta) - np.sqrt(beta)) / const - np.sqrt(gamma / const)
+        spread = 2 * (np.exp(alpha) - 1) / (1 + np.exp(alpha))
+    both = t_low.notna() & prev_low.notna() & (t_low > 0) & (prev_low > 0)
+    return spread.clip(lower=0).where(both).rename("cs_spread")
+
+
 def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
     """Turn daily `stocks` prices into one total return per stock per calendar month.
 
@@ -161,6 +220,8 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     - `illiq_sum`, `illiq_n`: sum and count of daily |return| / dollar volume over
       days that traded (Amihud 2002).
     - `n_trade_days`: days with a price row; `n_zero_volume`: those with no volume.
+    - `cs_sum`, `cs_n`: sum and count of the month's Corwin-Schultz day-pair
+      estimates (`corwin_schultz_spread`), for the BidAskSpread signal.
     """
     if stocks.duplicated(["ticker", "date"]).any():
         raise ValueError("stocks has duplicate (ticker, date) rows")
@@ -182,6 +243,7 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     prev_daily = daily.groupby("permaticker")["closeadj"].shift(1)
     daily["dret"] = daily["closeadj"] / prev_daily - 1
     daily["ar_product"] = abdi_ranaldo_product(daily)
+    daily["cs_spread"] = corwin_schultz_spread(daily)
     dollars = daily["close"] * daily["volume"]
     moments = (
         daily.assign(
@@ -207,11 +269,13 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
             illiq_n=("illiq", "count"),
             n_trade_days=("date", "count"),
             n_zero_volume=("zero_volume", "sum"),
+            cs_sum=("cs_spread", "sum"),
+            cs_n=("cs_spread", "count"),
         )
     )
 
     monthly = (
-        daily.drop(columns=["dret", "ar_product", "high", "low", "volume"])
+        daily.drop(columns=["dret", "ar_product", "cs_spread", "high", "low", "volume"])
         .groupby(["permaticker", "month"], as_index=False)
         .last()
         .rename(
@@ -251,6 +315,8 @@ DAILY_SUMMARY_COLUMNS = [
     "illiq_n",
     "n_trade_days",
     "n_zero_volume",
+    "cs_sum",
+    "cs_n",
 ]
 
 
