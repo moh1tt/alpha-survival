@@ -108,9 +108,9 @@ Spinoff,Event,1,"Cusatis, Miles and Woolridge (1993), JFE",computable,3,actions:
 Herf,Other,-1,"Hou and Robinson (2006), JF",computable,3,sf1:revenue; tickers:siccode,,current SIC code
 HerfAsset,Other,-1,"Hou and Robinson (2006), JF",computable,3,sf1:assets; tickers:siccode,,current SIC code
 HerfBE,Other,-1,"Hou and Robinson (2006), JF",computable,3,sf1:equity; tickers:siccode,,current SIC code
-Beta,Price,1,"Fama and MacBeth (1973), JPE",computable,3,sep:closeadj,"kenfrench:mktrf,rf",
+Beta,Price,1,"Fama and MacBeth (1973), JPE",computable,3,sep:closeadj,kenfrench:rf,"equal-weighted market from our own universe (OSAP: CRSP ewretd)"
 BetaFP,Price,1,"Frazzini and Pedersen (2014), JFE",computable,3,sep:closeadj,"kenfrench:mktrf,rf",
-BetaLiquidityPS,Price,1,"Pastor and Stambaugh (2003), JPE",computable,3,sep:closeadj,pastor:liquidity; kenfrench:rf,new free source (Pastor website): ask before adding
+BetaLiquidityPS,Price,1,"Pastor and Stambaugh (2003), JPE",computable,3,sep:closeadj,"pastor:liquidity; kenfrench:mktrf,smb,hml,rf","PS re-estimate the whole series yearly: later data in old values (as OSAP); kept and flagged, agreed 2026-10-23"
 BetaTailRisk,Price,1,"Kelly and Jiang (2014), RFS",computable,3,sep:closeadj,,tail measure from all firms' daily returns
 CoskewACX,Price,-1,"Ang, Chen and Xing (2006), RFS",computable,3,sep:closeadj,"kenfrench:mktrf,rf",
 Coskewness,Price,-1,"Harvey and Siddique (2000), JF",computable,3,sep:closeadj,"kenfrench:mktrf,rf",

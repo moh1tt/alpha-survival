@@ -145,6 +145,9 @@ FEATURE_ACRONYMS = {
     "num_earn_increase": "NumEarnIncrease",
     # Step 62: book leverage
     "book_leverage": "BookLeverage",
+    # Step 65: monthly factor regressions
+    "beta": "Beta",
+    "beta_liquidity_ps": "BetaLiquidityPS",
 }
 
 

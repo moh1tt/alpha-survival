@@ -1137,6 +1137,95 @@ def add_quarterly_signals(panel: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _rolling_ols(
+    y: pd.DataFrame, factors: pd.DataFrame, window: int, min_periods: int
+) -> dict[str, pd.DataFrame]:
+    """OLS with an intercept of every column of `y` (a month x stock grid) on the
+    `factors` columns (one value per month, shared by all stocks), over the last
+    `window` calendar months: coefficient grids keyed "const" and by factor name.
+
+    b = (X'X)^-1 X'y, where every entry of X'X and X'y is a rolling sum of products
+    over the months a stock has a return and every factor has a value, so each
+    stock-month only uses that month and earlier. NaN with fewer than
+    `min_periods` such months, or when X'X is singular.
+    """
+    x = factors.reindex(y.index)
+    valid = y.notna().to_numpy() & x.notna().all(axis=1).to_numpy()[:, None]
+    m = valid.astype(float)
+    yv = np.where(valid, y.to_numpy(), 0.0)
+    columns = [np.ones((len(y), 1)), *(x[[c]].fillna(0.0).to_numpy() for c in x.columns)]
+    names = ["const", *x.columns]
+    k = len(columns)
+
+    def roll(values: np.ndarray) -> np.ndarray:
+        total = np.cumsum(values, axis=0)
+        total[window:] = total[window:] - total[:-window].copy()
+        return total
+
+    n = roll(m)
+    cells = np.nonzero(n >= max(min_periods, k))
+    xtx = np.empty((len(cells[0]), k, k))
+    xty = np.empty((len(cells[0]), k))
+    for i in range(k):
+        xty[:, i] = roll(columns[i] * yv)[cells]
+        for j in range(i, k):
+            xtx[:, i, j] = xtx[:, j, i] = roll(columns[i] * columns[j] * m)[cells]
+
+    # Singular when a factor does not vary over the stock's months. |det| is at most
+    # the product of the diagonal (Hadamard), so the test is scale-free.
+    det = np.linalg.det(xtx)
+    solvable = np.abs(det) > 1e-10 * np.prod(np.diagonal(xtx, axis1=1, axis2=2), axis=1)
+    beta = np.full((len(cells[0]), k), np.nan)
+    if solvable.any():
+        beta[solvable] = np.linalg.solve(xtx[solvable], xty[solvable][..., None])[..., 0]
+
+    out = {}
+    for i, name in enumerate(names):
+        grid = np.full(y.shape, np.nan)
+        grid[cells] = beta[:, i]
+        out[name] = pd.DataFrame(grid, index=y.index, columns=y.columns)
+    return out
+
+
+# Monthly factor regressions (OSAP's code). Each sign is in run.PUBLISHED_SIGN.
+BETA_MONTHS, BETA_MIN = 60, 20  # Beta: >= 20 of the last 60 months
+PS_MONTHS, PS_MIN = 60, 36  # BetaLiquidityPS: >= 36 of the last 60 months
+
+
+def add_factor_betas(panel: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame:
+    """Add `beta` and `beta_liquidity_ps`: rolling slopes of a stock's monthly excess
+    return (ret - rf) on factor returns, over calendar months up to month_end.
+
+    `factors`: indexed by month_end, columns rf, mktrf, smb, hml, ps_innov, each a
+    value known by that month end (`data.external.monthly_factors`).
+    - `beta`: slope on the equal-weighted market excess return, 60 months, >= 20
+      (Beta; Fama & MacBeth 1973). OSAP uses CRSP's equal-weighted index; ours is
+      the mean `ret` over every stock in the panel that month, known at its end.
+    - `beta_liquidity_ps`: slope on the Pastor-Stambaugh liquidity innovation, with
+      mktrf, smb and hml as controls, 60 months, >= 36 (BetaLiquidityPS; Pastor &
+      Stambaugh 2003). Caveat: they re-estimate the whole liquidity series every
+      year, so its values depend on later data (as in OSAP); months after the
+      file's last update simply drop out of the window.
+    Windows run over calendar months, not rows: a gap cannot stretch them.
+    """
+    panel = _sorted_by_stock(panel)
+    months = _calendar_grid(panel, "ret").index
+    factors = factors.reindex(months)
+
+    excess = _calendar_grid(
+        panel.assign(_x=panel["ret"] - panel["month_end"].map(factors["rf"])), "_x"
+    )
+    ew_market = panel.groupby("month_end")["ret"].mean().reindex(months) - factors["rf"]
+
+    beta = _rolling_ols(excess, ew_market.to_frame("ewmktrf"), BETA_MONTHS, BETA_MIN)
+    ps = _rolling_ols(excess, factors[["ps_innov", "mktrf", "smb", "hml"]], PS_MONTHS, PS_MIN)
+    return _with(
+        panel,
+        beta=_at_rows(beta["ewmktrf"], panel, excess),
+        beta_liquidity_ps=_at_rows(ps["ps_innov"], panel, excess),
+    )
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 

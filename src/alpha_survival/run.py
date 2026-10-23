@@ -16,6 +16,7 @@ from sklearn.linear_model import LinearRegression, Ridge
 
 from alpha_survival.catalogue import FEATURE_ACRONYMS, published_signs
 from alpha_survival.combine import rank_average
+from alpha_survival.data.external import monthly_factors
 from alpha_survival.data.quality import markdown_table
 from alpha_survival.data.real import load_panel
 from alpha_survival.features import (
@@ -24,6 +25,7 @@ from alpha_survival.features import (
     add_balance_sheet_changes,
     add_book_payout_debt_ratios,
     add_daily_price_signals,
+    add_factor_betas,
     add_financing_signals,
     add_investment_growth,
     add_momentum,
@@ -101,12 +103,13 @@ EARLIER_TRIALS = {
     "single-signal portfolios on the original 7 features, built in Steps 27-45": 28,
     "ols, enet, lgbm and combo portfolios on the original 7 features (Steps 27-45)": 16,
     "ols, enet, lgbm and combo portfolios on 28 features (Step 51)": 16,
-    "ridge and rolling-window OLS, equal- or value-weighted, on 7 and on 28 features and "
-    "on this run's (tried, never built)": 12,
+    "ols, enet, lgbm and combo portfolios on 99 features (Step 63)": 16,
+    "ridge and rolling-window OLS, equal- or value-weighted, on 7, 28 and 99 features and "
+    "on this run's (tried, never built)": 16,
 }
 UNREPORTED_TRIALS = sum(EARLIER_TRIALS.values())
 # Trial counts to show the deflated Sharpe ratio at, besides the honest count.
-SENSITIVITY_TRIALS = (20, 100)
+SENSITIVITY_TRIALS = (20, 200)
 # Equal-weight rank combination of the learned models, members fixed before seeing
 # how the combination does.
 COMBO = "combo"
@@ -132,12 +135,13 @@ def rolling_models() -> list[Forecaster]:
     return [HistoricalMean(), SklearnForecaster(LinearRegression(), FEATURES, "ols")]
 
 
-def prepare(panel: pd.DataFrame) -> pd.DataFrame:
+def prepare(panel: pd.DataFrame, factors: pd.DataFrame | None = None) -> pd.DataFrame:
     """Add features on the full panel, keep the rows that may be bought, rank them.
 
     Order matters: momentum needs a stock's history from months it was below the
     price cut, so features come first and the investable filter second. Ranks come
     last, so each stock is ranked among the stocks that could actually be bought.
+    `factors`: monthly factor returns (default: `data.external.monthly_factors()`).
     """
     panel = add_reversal(add_value(add_size(add_momentum(panel))))
     panel = add_volatility(add_asset_growth(add_profitability(panel)))
@@ -147,6 +151,9 @@ def prepare(panel: pd.DataFrame) -> pd.DataFrame:
     panel = add_balance_sheet_changes(add_accrual_signals(panel))
     panel = add_financing_signals(add_investment_growth(panel))
     panel = add_quarterly_signals(add_turnover_signals(panel))
+    if factors is None:
+        factors = monthly_factors()
+    panel = add_factor_betas(panel, factors)
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
 

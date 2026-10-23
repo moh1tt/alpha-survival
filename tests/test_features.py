@@ -1241,3 +1241,95 @@ def test_quarterly_signals_ignore_later_months_and_other_stocks():
     out = features.add_quarterly_signals(pd.concat([shocked, other], ignore_index=True))
     out = out[out["permaticker"] == 1].reset_index(drop=True)
     pd.testing.assert_frame_equal(out.loc[:29, QUARTERLY_SIGNALS], base.loc[:29, QUARTERLY_SIGNALS])
+
+
+def ols_by_hand(y, x):
+    """Intercept + slopes by numpy least squares, the reference for _rolling_ols."""
+    design = np.column_stack([np.ones(len(y)), x])
+    return np.linalg.lstsq(design, y, rcond=None)[0]
+
+
+def test_rolling_ols_matches_least_squares_over_valid_months():
+    rng = np.random.default_rng(0)
+    months = pd.date_range("2020-01-31", periods=30, freq="ME")
+    factors = pd.DataFrame(rng.normal(0, 0.05, (30, 2)), index=months, columns=["f1", "f2"])
+    y = pd.DataFrame({7: rng.normal(0, 0.1, 30)}, index=months)
+    y.iloc[25, 0] = np.nan  # a missing stock month
+    factors.iloc[27, 1] = np.nan  # a missing factor month
+    out = features._rolling_ols(y, factors, window=12, min_periods=8)
+
+    t = 29  # window = months 18..29, minus 25 and 27
+    keep = [i for i in range(18, 30) if i not in (25, 27)]
+    expected = ols_by_hand(y.iloc[keep, 0].to_numpy(), factors.iloc[keep].to_numpy())
+    got = [out[name].iloc[t, 0] for name in ["const", "f1", "f2"]]
+    assert got == pytest.approx(expected)
+
+
+def test_rolling_ols_needs_min_periods_and_a_varying_factor():
+    months = pd.date_range("2020-01-31", periods=12, freq="ME")
+    y = pd.DataFrame({1: np.linspace(0, 0.1, 12)}, index=months)
+    moving = pd.DataFrame({"f": np.linspace(-0.05, 0.05, 12)}, index=months)
+    out = features._rolling_ols(y, moving, window=12, min_periods=10)
+    assert out["f"].iloc[:9, 0].isna().all()
+    assert out["f"].iloc[9:, 0].notna().all()
+
+    flat = pd.DataFrame({"f": 0.02}, index=months)  # no variation: slope undefined
+    assert features._rolling_ols(y, flat, window=12, min_periods=10)["f"].isna().all().all()
+
+
+def factor_panel(n_months=70, n_stocks=4, seed=0):
+    rng = np.random.default_rng(seed)
+    months = pd.date_range("2015-01-31", periods=n_months, freq="ME")
+    panel = pd.concat(
+        [panel_for(s, rng.normal(0.01, 0.08, n_months), start=months[0]) for s in range(n_stocks)],
+        ignore_index=True,
+    )
+    factors = pd.DataFrame(
+        rng.normal(0, 0.04, (n_months, 4)),
+        index=months,
+        columns=["mktrf", "smb", "hml", "ps_innov"],
+    ).assign(rf=0.002)
+    return panel, factors
+
+
+def test_beta_is_slope_on_equal_weighted_market_over_60_months():
+    panel, factors = factor_panel()
+    out = features.add_factor_betas(panel, factors)
+    ew = panel.groupby("month_end")["ret"].mean() - 0.002
+    stock = panel[panel["permaticker"] == 1].set_index("month_end")["ret"] - 0.002
+    window = stock.index[-60:]
+    expected = ols_by_hand(stock[window].to_numpy(), ew[window].to_numpy())[1]
+    got = out[out["permaticker"] == 1]["beta"].iloc[-1]
+    assert got == pytest.approx(expected)
+    # 20 months with a return are needed: the 20th month is the first with a beta.
+    first = out[out["permaticker"] == 1]["beta"]
+    assert first.iloc[:19].isna().all() and first.iloc[19:].notna().all()
+
+
+def test_beta_liquidity_ps_controls_for_ff3_and_skips_missing_liquidity():
+    panel, factors = factor_panel()
+    factors.loc[factors.index[-5:], "ps_innov"] = np.nan  # the file stops before the panel
+    out = features.add_factor_betas(panel, factors)
+    stock = panel[panel["permaticker"] == 2].set_index("month_end")["ret"] - 0.002
+    window = stock.index[-60:-5]  # the last 5 months have no liquidity value
+    x = factors.loc[window, ["ps_innov", "mktrf", "smb", "hml"]].to_numpy()
+    expected = ols_by_hand(stock[window].to_numpy(), x)[1]
+    got = out[out["permaticker"] == 2]["beta_liquidity_ps"].iloc[-1]
+    assert got == pytest.approx(expected)
+
+
+def test_factor_betas_ignore_the_future():
+    # Leakage test: later returns, the target and later factor values must not move month t.
+    panel, factors = factor_panel()
+    t = panel["month_end"].unique()[50]
+    before = features.add_factor_betas(panel, factors)
+    changed = panel.copy()
+    later = changed["month_end"] > t
+    changed.loc[later, "ret"] = 0.9
+    changed["fwd_ret"] = 0.9
+    later_factors = factors.copy()
+    later_factors.loc[factors.index > t] = 0.3
+    after = features.add_factor_betas(changed, later_factors)
+    at_t = before["month_end"] == t
+    for col in ["beta", "beta_liquidity_ps"]:
+        assert after.loc[at_t, col].to_numpy() == pytest.approx(before.loc[at_t, col].to_numpy())

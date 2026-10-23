@@ -156,6 +156,20 @@ def load(name: str, raw_dir: Path = EXTERNAL_DIR) -> pd.DataFrame:
     return pd.read_parquet(raw_dir / f"{name}.parquet")
 
 
+def monthly_factors(raw_dir: Path = EXTERNAL_DIR) -> pd.DataFrame:
+    """Monthly rf, mktrf, smb, hml and ps_innov, indexed by the month end each is
+    known at. A monthly value is about the month it is available at the end of, so
+    a factor return and a stock return of the same month line up."""
+    ff = load("ff3_monthly", raw_dir)
+    ps = load("ps_liquidity", raw_dir)
+    for name, df in [("ff3_monthly", ff), ("ps_liquidity", ps)]:
+        if not (df["available"] == df["date"]).all():
+            raise ValueError(f"{name}: monthly values must be available at their own month end")
+    ff = ff.set_index("available")[["rf", "mktrf", "smb", "hml"]]
+    ps = ps.set_index("available")["innov_liq"].rename("ps_innov")
+    return ff.join(ps, how="left").rename_axis("month_end")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Download external series to Parquet.")
     parser.add_argument("--out-dir", type=Path, default=EXTERNAL_DIR)

@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from alpha_survival import run
 from alpha_survival.models import HistoricalMean
 from alpha_survival.run import (
     COST_BPS,
@@ -31,6 +32,18 @@ from alpha_survival.run import (
 
 N_STOCKS, N_MONTHS = 15, 40
 MONTHS = pd.date_range("2000-01-31", periods=N_MONTHS, freq="ME")
+
+
+@pytest.fixture(autouse=True)
+def toy_factors(monkeypatch):
+    """prepare() loads factor returns from data/raw; tests get toy ones, no files."""
+    rng = np.random.default_rng(1)
+    factors = pd.DataFrame(
+        rng.normal(0, 0.04, (N_MONTHS, 4)),
+        index=MONTHS,
+        columns=["mktrf", "smb", "hml", "ps_innov"],
+    ).assign(rf=0.002)
+    monkeypatch.setattr(run, "monthly_factors", lambda: factors)
 
 
 def make_panel(seed: int = 0) -> pd.DataFrame:
@@ -175,7 +188,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 99
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 101
 
 
 def test_prepare_ranks_among_investable_stocks_only():
@@ -244,7 +257,7 @@ def test_selection_table_deflates_every_portfolio_by_the_honest_trial_count():
     run_all(panel, keep=forecasts, min_train=12)
     portfolio_table(forecasts, panel, keep_net=net)
     assert len(net) == 16  # 4 models x 2 weightings x 2 leg rules
-    assert UNREPORTED_TRIALS == 72  # earlier portfolios stay trials
+    assert UNREPORTED_TRIALS == 92  # earlier portfolios stay trials
     table = selection_table(net)
     honest = f"dsr_n{16 + UNREPORTED_TRIALS}"
     assert list(table.columns) == [
@@ -255,13 +268,13 @@ def test_selection_table_deflates_every_portfolio_by_the_honest_trial_count():
         "psr",
         "dsr_n20",
         honest,
-        "dsr_n100",
+        "dsr_n200",
     ]
     assert table["sharpe_net_est"].is_monotonic_decreasing  # best first
     # Same Sharpe as the NET table, and more trials only ever make the test harder.
     best = table.iloc[0]
-    assert best["psr"] > best["dsr_n20"] > best[honest] > best["dsr_n100"]
-    probs = table[["psr", "dsr_n20", honest, "dsr_n100"]]
+    assert best["psr"] > best["dsr_n20"] > best[honest] > best["dsr_n200"]
+    probs = table[["psr", "dsr_n20", honest, "dsr_n200"]]
     assert ((probs >= 0) & (probs <= 1)).all().all()
     report = render_selection(table, net)
     assert "deflated Sharpe" in report and f"Trials: {16 + UNREPORTED_TRIALS}" in report
