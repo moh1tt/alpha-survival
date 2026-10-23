@@ -157,6 +157,9 @@ FEATURE_ACRONYMS = {
     "realized_vol": "RealizedVol",
     "idio_vol_aht": "IdioVolAHT",
     "beta_vix": "betaVIX",
+    # Step 68: daily log-return coskewness and Frazzini-Pedersen beta
+    "coskew_acx": "CoskewACX",
+    "beta_fp": "BetaFP",
 }
 
 

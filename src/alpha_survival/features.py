@@ -1187,7 +1187,8 @@ def _excess_grid(panel: pd.DataFrame, factors: pd.DataFrame) -> tuple[pd.DataFra
     """Monthly excess returns (ret - rf) as a month x stock grid, and `factors` on its months."""
     factors = factors.reindex(_calendar_grid(panel, "ret").index)
     excess = panel["ret"] - panel["month_end"].map(factors["rf"])
-    return _calendar_grid(panel.assign(_x=excess), "_x"), factors
+    keys = panel[["permaticker", "month_end"]]
+    return _calendar_grid(keys.assign(_x=excess), "_x"), factors
 
 
 # Monthly factor regressions (OSAP's code). Each sign is in run.PUBLISHED_SIGN.
@@ -1321,6 +1322,64 @@ def add_daily_factor_signals(panel: pd.DataFrame) -> pd.DataFrame:
         realized_vol=np.sqrt(xvar.clip(lower=0)).where(enough),
         idio_vol_aht=_at_rows(rmse, panel, grids["xret_n"]),
         beta_vix=panel["vix_beta"].where(panel["vix_n"] >= MIN_FACTOR_DAYS),
+    )
+
+
+ACX_MONTHS, ACX_SLACK = 12, 5  # CoskewACX: 12 months, within 5 days of the fullest stock
+FP_VOL_MONTHS, FP_VOL_MIN = 12, 120  # BetaFP volatilities: 12 months, >= 120 days
+FP_CORR_MONTHS, FP_CORR_MIN = 60, 750  # BetaFP correlation: 60 months, >= 750 3-day returns
+
+
+def add_coskew_acx_beta_fp(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `coskew_acx` and `beta_fp` from daily log excess returns (the `lx_*`,
+    `lm_*` and `l3*` sums of data.real.daily_factor_summaries; OSAP's code).
+    Windows are calendar months up to month_end.
+
+    - `coskew_acx`: E[x m^2] / (sqrt(E[x^2]) E[m^2]), x and m the stock's and the
+      market's daily log excess returns demeaned over the last 12 months (CoskewACX;
+      Ang, Chen & Xing 2006). As OSAP, only stocks with at most 5 days fewer than
+      the month's fullest stock: in effect a full year.
+    - `beta_fp`: |corr| x sd(x) / sd(m) (BetaFP; Frazzini & Pedersen 2014). The
+      correlation is of overlapping 3-day log returns over 60 months (>= 750), so
+      stale prices of thinly traded stocks wash out; the volatilities are of daily
+      log returns over 12 months (>= 120 days, ddof 1). OSAP's windows are 1,260
+      and 252 trading days; whole months are about the same.
+    """
+    panel = _sorted_by_stock(panel)
+    cols = ["xret_n", "lx_sum", "lx_sumsq", "lm_sum", "lm_sumsq", "lx_lm_sum", "lx_lm2_sum"]
+    cols += ["l3_n", "l3x_sum", "l3x_sumsq", "l3m_sum", "l3m_sumsq", "l3x_l3m_sum"]
+    grids = {c: _calendar_grid(panel, c) for c in cols}
+
+    def summed(names: list[str], months: int) -> dict[str, pd.DataFrame]:
+        return {c: grids[c].rolling(months, min_periods=1).sum() for c in names}
+
+    w = summed(cols[:7], ACX_MONTHS)
+    n = w["xret_n"].where(w["xret_n"] > 0)
+    a, b = w["lx_sum"] / n, w["lm_sum"] / n
+    co = w["lx_lm2_sum"] / n - 2 * b * w["lx_lm_sum"] / n - a * w["lm_sumsq"] / n + 2 * a * b * b
+    var_x, var_m = w["lx_sumsq"] / n - a * a, w["lm_sumsq"] / n - b * b
+    acx = co / (np.sqrt(var_x.where(var_x > 0)) * var_m.where(var_m > 0))
+    full = n >= n.max(axis=1).to_numpy()[:, None] - ACX_SLACK
+    acx = acx.where(full)
+
+    v = summed(cols[:5], FP_VOL_MONTHS)
+    days = v["xret_n"]
+    sd_x = np.sqrt((v["lx_sumsq"] - v["lx_sum"] ** 2 / days) / (days - 1))
+    sd_m = np.sqrt((v["lm_sumsq"] - v["lm_sum"] ** 2 / days) / (days - 1))
+    ratio = (sd_x / sd_m.where(sd_m > 0)).where(days >= FP_VOL_MIN)
+
+    c = summed(cols[7:], FP_CORR_MONTHS)
+    k = c["l3_n"]
+    sxy = c["l3x_l3m_sum"] - c["l3x_sum"] * c["l3m_sum"] / k
+    sxx = c["l3x_sumsq"] - c["l3x_sum"] ** 2 / k
+    syy = c["l3m_sumsq"] - c["l3m_sum"] ** 2 / k
+    corr = (sxy / np.sqrt((sxx * syy).where((sxx > 0) & (syy > 0)))).where(k >= FP_CORR_MIN)
+
+    like = grids["xret_n"]
+    return _with(
+        panel,
+        coskew_acx=_at_rows(acx, panel, like),
+        beta_fp=_at_rows(corr.abs() * ratio, panel, like),
     )
 
 

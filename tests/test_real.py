@@ -926,3 +926,25 @@ def test_monthly_returns_carry_factor_summaries_only_when_given_factors():
     assert not set(real.FACTOR_SUMMARY_COLUMNS) & set(plain.columns)
     with_f = real.build_monthly_returns(prices, master_for("AAA"), factor_days(dates))
     assert with_f["xret_n"].tolist() == [0, 2]  # January's only day has no return
+
+
+def test_log_and_three_day_sums_by_hand():
+    dates = pd.bdate_range("2024-01-01", "2024-02-29")
+    factors = factor_days(dates)
+    daily = daily_rets(dates)
+    out = real.daily_factor_summaries(daily.sample(frac=1, random_state=0), factors)  # any order
+
+    d = daily.set_index("date").join(factors)
+    x = np.log1p(d["dret"]) - np.log1p(d["rf"])
+    m = np.log1p(d["mktrf"] + d["rf"]) - np.log1p(d["rf"])
+    x3, m3 = x.rolling(3).sum(), m.rolling(3).sum()  # the day and the two before
+    feb = d.index.month == 2
+    row = out.loc[(1, pd.Period("2024-02", "M"))]
+    assert row["lx_sum"] == pytest.approx(x[feb].sum())
+    assert row["lx_lm2_sum"] == pytest.approx((x * m * m)[feb].sum())
+    # February's first two 3-day returns reach back into January's last days.
+    assert row["l3_n"] == feb.sum()
+    assert row["l3x_sum"] == pytest.approx(x3[feb].sum())
+    assert row["l3x_l3m_sum"] == pytest.approx((x3 * m3)[feb].sum())
+    jan = out.loc[(1, pd.Period("2024-01", "M"))]
+    assert jan["l3_n"] == (~feb).sum() - 2  # the first two days have no 3-day return

@@ -105,6 +105,12 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["ff3_resid_sumsq"] = panel["xret_sumsq"] * rng.uniform(0.5, 0.9, len(panel))
     panel["ff3_resid_sumcube"] = rng.normal(0, 1e-5, len(panel))
     panel["vix_beta"] = rng.normal(0, 0.1, len(panel))
+    for prefix in ["lx", "lm", "l3x", "l3m"]:  # daily (and 3-day) log-return sums
+        panel[f"{prefix}_sum"] = rng.normal(0, 0.05, len(panel))
+        panel[f"{prefix}_sumsq"] = 21 * rng.uniform(0.0002, 0.002, len(panel))
+    panel["lx_lm_sum"] = panel["l3x_l3m_sum"] = rng.normal(0, 0.001, len(panel))
+    panel["lx_lm2_sum"] = rng.normal(0, 1e-5, len(panel))
+    panel["l3_n"] = 21
     return panel
 
 
@@ -199,7 +205,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 108
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 110
 
 
 def test_prepare_ranks_among_investable_stocks_only():

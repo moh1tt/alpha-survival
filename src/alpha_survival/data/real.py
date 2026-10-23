@@ -329,6 +329,18 @@ FACTOR_SUMMARY_COLUMNS = [
     "ff3_resid_sumcube",
     "vix_n",
     "vix_beta",
+    "lx_sum",
+    "lx_sumsq",
+    "lm_sum",
+    "lm_sumsq",
+    "lx_lm_sum",
+    "lx_lm2_sum",
+    "l3_n",
+    "l3x_sum",
+    "l3x_sumsq",
+    "l3m_sum",
+    "l3m_sumsq",
+    "l3x_l3m_sum",
 ]
 
 
@@ -365,9 +377,18 @@ def daily_factor_summaries(daily: pd.DataFrame, factors: pd.DataFrame) -> pd.Dat
       the month's own regression of y on mktrf, smb, hml with an intercept.
     - `vix_n`, `vix_beta`: days that also have a VIX change, and the month's slope of
       y on dvix with mktrf as a control.
-    All from days within the month, so known at its end.
+    - `lx_*`, `lm_*`: sums of daily LOG excess returns x = log(1 + dret) - log(1 + rf)
+      and m = log(1 + mktrf + rf) - log(1 + rf), their squares, x m and x m^2 (Ang,
+      Chen & Xing 2006, as OSAP's CoskewACX). Counted by `xret_n`.
+    - `l3_n`, `l3x_*`, `l3m_*`: count and sums of overlapping 3-day log excess
+      returns (this day and the stock's two previous days with factors, which may
+      fall in the month before), their squares and cross-product (Frazzini &
+      Pedersen 2014). OSAP's BetaFP takes log(1 + dret - rf) and log(1 + mktrf):
+      the same up to terms of order rf x return, about 1e-6 a day.
+    All from days up to the month's end, so known at its end.
     """
-    d = daily[["permaticker", "month", "date", "dret"]].join(factors, on="date")
+    d = daily[["permaticker", "month", "date", "dret"]].sort_values(["permaticker", "date"])
+    d = d.join(factors, on="date")
     groups = d.groupby(["permaticker", "month"], sort=True)
     codes = groups.ngroup().to_numpy()
     index = groups.size().index
@@ -388,6 +409,21 @@ def daily_factor_summaries(daily: pd.DataFrame, factors: pd.DataFrame) -> pd.Dat
     fitted = ~np.isnan(b[:, 0])
     vix_b = _group_ols(codes, n, y, [ones, mkt, dvix], vx)
 
+    rf = d["rf"].to_numpy()
+    with np.errstate(invalid="ignore"):
+        lx = np.log1p(d["dret"].to_numpy()) - np.log1p(rf)
+        lm = np.log1p(mkt + rf) - np.log1p(rf)
+    # 3-day sums over each stock's consecutive days with factors (rows are sorted by
+    # stock and date): the day itself and the two before it, never a later day.
+    rows = pd.Series(np.flatnonzero(ff))
+    stock = d["permaticker"].to_numpy()[rows]
+    l3x, l3m = np.full(len(d), np.nan), np.full(len(d), np.nan)
+    for target, values in [(l3x, lx), (l3m, lm)]:
+        v = pd.Series(values[rows])
+        by_stock = v.groupby(stock)
+        target[rows] = (v + by_stock.shift(1) + by_stock.shift(2)).to_numpy()
+    l3 = ~np.isnan(l3x)
+
     out = pd.DataFrame(
         {
             "xret_n": total(ones),
@@ -400,6 +436,18 @@ def daily_factor_summaries(daily: pd.DataFrame, factors: pd.DataFrame) -> pd.Dat
             "ff3_resid_sumcube": np.where(fitted, total(resid**3), np.nan),
             "vix_n": total(ones, vx),
             "vix_beta": vix_b[:, 2],
+            "lx_sum": total(lx),
+            "lx_sumsq": total(lx * lx),
+            "lm_sum": total(lm),
+            "lm_sumsq": total(lm * lm),
+            "lx_lm_sum": total(lx * lm),
+            "lx_lm2_sum": total(lx * lm * lm),
+            "l3_n": total(ones, l3),
+            "l3x_sum": total(l3x, l3),
+            "l3x_sumsq": total(l3x * l3x, l3),
+            "l3m_sum": total(l3m, l3),
+            "l3m_sumsq": total(l3m * l3m, l3),
+            "l3x_l3m_sum": total(l3x * l3m, l3),
         },
         index=index,
     )

@@ -1438,3 +1438,56 @@ def test_daily_factor_signals_ignore_later_months():
     a = features.add_daily_factor_signals(panel).loc[t, cols]
     b = features.add_daily_factor_signals(wild).loc[t, cols]
     pd.testing.assert_series_equal(a, b)
+
+
+def logs(d):
+    x = np.log1p(d["dret"]) - np.log1p(d["rf"])
+    m = np.log1p(d["mktrf"] + d["rf"]) - np.log1p(d["rf"])
+    return x, m
+
+
+def test_coskew_acx_and_beta_fp_by_hand():
+    panel, d = daily_factor_panel(months=62)
+    out = features.add_coskew_acx_beta_fp(panel)
+    x, m = logs(d)
+    last = d["month"].max()
+    row = out.iloc[-1]
+
+    year = (d["month"] > last - 12).to_numpy()
+    xd, md = x[year] - x[year].mean(), m[year] - m[year].mean()
+    expected = (xd * md**2).mean() / (np.sqrt((xd**2).mean()) * (md**2).mean())
+    assert row["coskew_acx"] == pytest.approx(expected)
+
+    five = (d["month"] > last - 60).to_numpy()
+    x3, m3 = x.rolling(3).sum(), m.rolling(3).sum()
+    corr = np.corrcoef(x3[five], m3[five])[0, 1]
+    assert row["beta_fp"] == pytest.approx(abs(corr) * x[year].std(ddof=1) / m[year].std(ddof=1))
+
+
+def test_beta_fp_needs_750_three_day_returns_and_acx_a_full_year():
+    panel, _ = daily_factor_panel(months=62)
+    out = features.add_coskew_acx_beta_fp(panel)
+    three_day = panel["l3_n"].rolling(60, min_periods=1).sum()
+    assert out["beta_fp"][three_day < 750].isna().all()
+    assert out["beta_fp"][three_day >= 750].notna().all()
+
+    # A second stock missing 6 days in its latest month is short of a full year.
+    short = panel.assign(permaticker=2)
+    short.loc[short.index[-1], ["xret_n"]] -= 6
+    out = features.add_coskew_acx_beta_fp(pd.concat([panel, short], ignore_index=True))
+    latest = out[out["month_end"] == panel["month_end"].max()].set_index("permaticker")
+    assert np.isfinite(latest.loc[1, "coskew_acx"]) and np.isnan(latest.loc[2, "coskew_acx"])
+
+
+def test_coskew_acx_and_beta_fp_ignore_later_months():
+    # Leakage test: wild later months cannot move month t.
+    panel, _ = daily_factor_panel(months=62)
+    t = 55
+    wild = panel.copy()
+    sums = [c for c in wild.columns if c.startswith(("lx", "lm", "l3x", "l3m"))]
+    wild.loc[t + 1 :, sums] = 3.0
+    cols = ["coskew_acx", "beta_fp"]
+    a = features.add_coskew_acx_beta_fp(panel).loc[t, cols]
+    b = features.add_coskew_acx_beta_fp(wild).loc[t, cols]
+    assert a.notna().all()
+    pd.testing.assert_series_equal(a, b)
