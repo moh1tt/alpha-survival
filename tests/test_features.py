@@ -1318,18 +1318,58 @@ def test_beta_liquidity_ps_controls_for_ff3_and_skips_missing_liquidity():
     assert got == pytest.approx(expected)
 
 
-def test_factor_betas_ignore_the_future():
+def test_factor_regressions_ignore_the_future():
     # Leakage test: later returns, the target and later factor values must not move month t.
     panel, factors = factor_panel()
     t = panel["month_end"].unique()[50]
-    before = features.add_factor_betas(panel, factors)
+
+    def build(p, f):
+        return features.add_residual_momentum_coskewness(features.add_factor_betas(p, f), f)
+
+    before = build(panel, factors)
     changed = panel.copy()
     later = changed["month_end"] > t
     changed.loc[later, "ret"] = 0.9
     changed["fwd_ret"] = 0.9
     later_factors = factors.copy()
     later_factors.loc[factors.index > t] = 0.3
-    after = features.add_factor_betas(changed, later_factors)
+    after = build(changed, later_factors)
     at_t = before["month_end"] == t
-    for col in ["beta", "beta_liquidity_ps"]:
+    for col in ["beta", "beta_liquidity_ps", "residual_momentum", "coskewness"]:
         assert after.loc[at_t, col].to_numpy() == pytest.approx(before.loc[at_t, col].to_numpy())
+
+
+def test_residual_momentum_by_hand():
+    panel, factors = factor_panel(n_months=60)
+    out = features.add_residual_momentum_coskewness(panel, factors)
+    y = panel[panel["permaticker"] == 3]["ret"].to_numpy() - 0.002
+    x = factors[["mktrf", "smb", "hml"]].to_numpy()
+
+    def residual(s):  # residual of month s in the 36-month fit ending at s
+        window = slice(s - 35, s + 1)
+        b = ols_by_hand(y[window], x[window])
+        return y[s] - b[0] - x[s] @ b[1:]
+
+    t = 59
+    resid = np.array([residual(s) for s in range(t - 11, t)])  # months t-11 .. t-1
+    expected = resid.mean() / resid.std(ddof=1)
+    got = out[out["permaticker"] == 3]["residual_momentum"]
+    assert got.iloc[t] == pytest.approx(expected)
+    # The first residual is at month 35, so the first signal needs months 35..45: t = 46.
+    assert got.iloc[:46].isna().all() and got.iloc[46:].notna().all()
+
+
+def test_coskewness_by_hand_with_a_missing_month():
+    panel, factors = factor_panel(n_months=70)
+    panel.loc[(panel["permaticker"] == 0) & (panel["month_end"] == factors.index[65]), "ret"] = (
+        np.nan
+    )
+    out = features.add_residual_momentum_coskewness(panel, factors)
+    r = panel[panel["permaticker"] == 0]["ret"].to_numpy() - 0.002
+    m = factors["mktrf"].to_numpy()
+    keep = [i for i in range(10, 70) if i != 65]  # last 60 months, minus the missing one
+    rd, md = r[keep] - r[keep].mean(), m[keep] - m[keep].mean()
+    expected = (rd * md**2).mean() / (np.sqrt((rd**2).mean()) * (md**2).mean())
+    got = out[out["permaticker"] == 0]["coskewness"]
+    assert got.iloc[69] == pytest.approx(expected)
+    assert got.iloc[:11].isna().all() and got.iloc[11:].notna().all()  # >= 12 months

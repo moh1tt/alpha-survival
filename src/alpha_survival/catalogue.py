@@ -148,6 +148,9 @@ FEATURE_ACRONYMS = {
     # Step 65: monthly factor regressions
     "beta": "Beta",
     "beta_liquidity_ps": "BetaLiquidityPS",
+    # Step 66: residual momentum and coskewness
+    "residual_momentum": "ResidualMomentum",
+    "coskewness": "Coskewness",
 }
 
 

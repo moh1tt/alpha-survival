@@ -33,6 +33,7 @@ from alpha_survival.features import (
     add_profitability,
     add_profitability_ratios,
     add_quarterly_signals,
+    add_residual_momentum_coskewness,
     add_reversal,
     add_seasonality,
     add_size,
@@ -153,7 +154,7 @@ def prepare(panel: pd.DataFrame, factors: pd.DataFrame | None = None) -> pd.Data
     panel = add_quarterly_signals(add_turnover_signals(panel))
     if factors is None:
         factors = monthly_factors()
-    panel = add_factor_betas(panel, factors)
+    panel = add_residual_momentum_coskewness(add_factor_betas(panel, factors), factors)
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
 

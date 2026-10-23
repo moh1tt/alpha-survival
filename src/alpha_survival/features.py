@@ -1187,6 +1187,13 @@ def _rolling_ols(
     return out
 
 
+def _excess_grid(panel: pd.DataFrame, factors: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Monthly excess returns (ret - rf) as a month x stock grid, and `factors` on its months."""
+    factors = factors.reindex(_calendar_grid(panel, "ret").index)
+    excess = panel["ret"] - panel["month_end"].map(factors["rf"])
+    return _calendar_grid(panel.assign(_x=excess), "_x"), factors
+
+
 # Monthly factor regressions (OSAP's code). Each sign is in run.PUBLISHED_SIGN.
 BETA_MONTHS, BETA_MIN = 60, 20  # Beta: >= 20 of the last 60 months
 PS_MONTHS, PS_MIN = 60, 36  # BetaLiquidityPS: >= 36 of the last 60 months
@@ -1209,13 +1216,8 @@ def add_factor_betas(panel: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame
     Windows run over calendar months, not rows: a gap cannot stretch them.
     """
     panel = _sorted_by_stock(panel)
-    months = _calendar_grid(panel, "ret").index
-    factors = factors.reindex(months)
-
-    excess = _calendar_grid(
-        panel.assign(_x=panel["ret"] - panel["month_end"].map(factors["rf"])), "_x"
-    )
-    ew_market = panel.groupby("month_end")["ret"].mean().reindex(months) - factors["rf"]
+    excess, factors = _excess_grid(panel, factors)
+    ew_market = panel.groupby("month_end")["ret"].mean().reindex(excess.index) - factors["rf"]
 
     beta = _rolling_ols(excess, ew_market.to_frame("ewmktrf"), BETA_MONTHS, BETA_MIN)
     ps = _rolling_ols(excess, factors[["ps_innov", "mktrf", "smb", "hml"]], PS_MONTHS, PS_MIN)
@@ -1223,6 +1225,55 @@ def add_factor_betas(panel: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame
         panel,
         beta=_at_rows(beta["ewmktrf"], panel, excess),
         beta_liquidity_ps=_at_rows(ps["ps_innov"], panel, excess),
+    )
+
+
+RESMOM_FIT, RESMOM_MONTHS = 36, 11  # ResidualMomentum: 36-month FF3 fits, 11 residuals
+COSKEW_MONTHS, COSKEW_MIN = 60, 12  # Coskewness: >= 12 of the last 60 months
+
+
+def add_residual_momentum_coskewness(panel: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame:
+    """Add `residual_momentum` and `coskewness` (OSAP's code; `factors` as in
+    `add_factor_betas`). Calendar-month windows, this month and earlier only.
+
+    - `residual_momentum`: each month s, the residual of s in an FF3 regression of
+      excess returns over months s-35 .. s (all 36 required). The signal is the mean
+      over the std (ddof 1) of those residuals for months t-11 .. t-1, all 11
+      required; month t is skipped as in momentum (ResidualMomentum; Blitz, Huij &
+      Martens 2011).
+    - `coskewness`: E[r m^2] / (sqrt(E[r^2]) E[m^2]) over the last 60 months
+      (>= 12), with r the stock's and m the market's (mktrf) excess return, both
+      demeaned over the months the stock has a return (Coskewness; Harvey &
+      Siddique 2000, eq. B-9).
+    """
+    panel = _sorted_by_stock(panel)
+    excess, factors = _excess_grid(panel, factors)
+
+    ff3 = factors[["mktrf", "smb", "hml"]]
+    fit = _rolling_ols(excess, ff3, RESMOM_FIT, RESMOM_FIT)
+    fitted = fit["const"] + sum(fit[c].mul(ff3[c], axis=0) for c in ff3.columns)
+    lagged = (excess - fitted).shift(1)
+    resid_mean = lagged.rolling(RESMOM_MONTHS, min_periods=RESMOM_MONTHS).mean()
+    resid_sd = lagged.rolling(RESMOM_MONTHS, min_periods=RESMOM_MONTHS).std()
+    residual_momentum = resid_mean / resid_sd.where(resid_sd > 0)
+
+    valid = excess.notna() & factors["mktrf"].notna().to_numpy()[:, None]
+    r = excess.where(valid)
+    m = valid.mul(factors["mktrf"], axis=0).where(valid)
+
+    def mean(values: pd.DataFrame) -> pd.DataFrame:
+        return values.rolling(COSKEW_MONTHS, min_periods=COSKEW_MIN).mean()
+
+    a, b = mean(r), mean(m)
+    # Expanding E[(r-a)(m-b)^2], E[(r-a)^2] and E[(m-b)^2] into means of raw powers.
+    co = mean(r * m * m) - 2 * b * mean(r * m) - a * mean(m * m) + 2 * a * b * b
+    var_r, var_m = mean(r * r) - a * a, mean(m * m) - b * b
+    coskewness = co / (np.sqrt(var_r.where(var_r > 0)) * var_m.where(var_m > 0))
+
+    return _with(
+        panel,
+        residual_momentum=_at_rows(residual_momentum, panel, excess),
+        coskewness=_at_rows(coskewness, panel, excess),
     )
 
 
