@@ -115,17 +115,17 @@ BetaTailRisk,Price,1,"Kelly and Jiang (2014), RFS",computable,3,sep:closeadj,,ta
 CoskewACX,Price,-1,"Ang, Chen and Xing (2006), RFS",computable,3,sep:closeadj,"kenfrench:mktrf,rf",
 Coskewness,Price,-1,"Harvey and Siddique (2000), JF",computable,3,sep:closeadj,"kenfrench:mktrf,rf",
 IdioVol3F,Price,-1,"Ang et al. (2006), JF",computable,3,sep:closeadj,kenfrench:ff3,
-IdioVolAHT,Price,-1,"Ali, Hwang, and Trombley (2003), JFE",computable,3,sep:closeadj,"kenfrench:mktrf,rf",
+IdioVolAHT,Price,-1,"Ali, Hwang, and Trombley (2003), JFE",computable,3,sep:closeadj,"kenfrench:mktrf,rf","12 calendar months of daily returns, >= 100 days (OSAP: last 252 trading days)"
 IndMom,Price,1,"Grinblatt and Moskowitz (1999), JF",computable,3,sep:closeadj; tickers:siccode,,industry = current SIC code (no SIC history kept)
 IndRetBig,Price,1,"Hou (2007), RFS",computable,3,sep:closeadj; tickers:famaindustry,,current Fama-French industry
 PriceDelayRsq,Price,1,"Hou and Moskowitz (2005), RFS",computable,3,sep:closeadj,kenfrench:mktrf,
 PriceDelaySlope,Price,1,"Hou and Moskowitz (2005), RFS",computable,3,sep:closeadj,kenfrench:mktrf,
 PriceDelayTstat,Price,1,"Hou and Moskowitz (2005), RFS",computable,3,sep:closeadj,kenfrench:mktrf,
-RealizedVol,Price,-1,"Ang et al. (2006), JF",computable,3,sep:closeadj,"kenfrench:mktrf,rf",CAPM residual vol; differs from our vol_3m (total vol)
+RealizedVol,Price,-1,"Ang et al. (2006), JF",computable,3,sep:closeadj,"kenfrench:mktrf,rf","std of the month's daily excess returns (OSAP's code: total, not residual); differs from our vol_3m (3 months)"
 ResidualMomentum,Price,1,"Blitz, Huij and Martens (2011), JEmpFin",computable,3,sep:closeadj,kenfrench:ff3,
 ReturnSkew3F,Price,-1,"Bali, Engle and Murray (2015), Book",computable,3,sep:closeadj,kenfrench:ff3,
 TrendFactor,Price,1,"Han, Zhou, Zhu (2016), JFE",computable,3,sep:closeadj,,moving averages combined by cross-sectional regression
-betaVIX,Price,-1,"Ang et al. (2006), JF",computable,3,sep:closeadj,"fred:VIXCLS; kenfrench:mktrf,rf",
+betaVIX,Price,-1,"Ang et al. (2006), JF",computable,3,sep:closeadj,"fred:VIXCLS; kenfrench:mktrf,rf","the month's trading days, >= 15 (OSAP: last 20 trading days); VIX throughout (OSAP: VXO until 2021)"
 FirmAge,Other,-1,"Barry and Brown (1984), JFE",approximate,1,sep:date,,"months since first month in our data (Dec 1997 start); firms listed by then keep that lower bound instead of OSAP's NaN"
 VolSD,Trading,-1,"Chordia, Subra, Anshuman (2001), JFE",computable,1,sep:volume,,"OSAP code applies no NYSE filter (SignalDoc mentions one); we follow the code"
 Accruals,Accounting,-1,"Sloan (1996), AR",approximate,2,"sf1:assetsc,cashneq,liabilitiesc,debtc,depamor,assets",,no income-taxes-payable field: term dropped

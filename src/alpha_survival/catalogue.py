@@ -151,6 +151,12 @@ FEATURE_ACRONYMS = {
     # Step 66: residual momentum and coskewness
     "residual_momentum": "ResidualMomentum",
     "coskewness": "Coskewness",
+    # Step 67: daily factor regressions
+    "idio_vol_3f": "IdioVol3F",
+    "return_skew_3f": "ReturnSkew3F",
+    "realized_vol": "RealizedVol",
+    "idio_vol_aht": "IdioVolAHT",
+    "beta_vix": "betaVIX",
 }
 
 

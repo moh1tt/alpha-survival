@@ -10,6 +10,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from alpha_survival.ols import solve_normal_equations
+
 # 12-1 momentum compounds the monthly returns of t-11 .. t-1: from the close at
 # the end of t-12 to the close at the end of t-1 (Jegadeesh & Titman 1993).
 # Month t itself is skipped because one-month returns tend to reverse
@@ -1171,13 +1173,7 @@ def _rolling_ols(
         for j in range(i, k):
             xtx[:, i, j] = xtx[:, j, i] = roll(columns[i] * columns[j] * m)[cells]
 
-    # Singular when a factor does not vary over the stock's months. |det| is at most
-    # the product of the diagonal (Hadamard), so the test is scale-free.
-    det = np.linalg.det(xtx)
-    solvable = np.abs(det) > 1e-10 * np.prod(np.diagonal(xtx, axis1=1, axis2=2), axis=1)
-    beta = np.full((len(cells[0]), k), np.nan)
-    if solvable.any():
-        beta[solvable] = np.linalg.solve(xtx[solvable], xty[solvable][..., None])[..., 0]
+    beta = solve_normal_equations(xtx, xty)
 
     out = {}
     for i, name in enumerate(names):
@@ -1274,6 +1270,57 @@ def add_residual_momentum_coskewness(panel: pd.DataFrame, factors: pd.DataFrame)
         panel,
         residual_momentum=_at_rows(residual_momentum, panel, excess),
         coskewness=_at_rows(coskewness, panel, excess),
+    )
+
+
+MIN_FACTOR_DAYS = 15  # IdioVol3F, RealizedVol, ReturnSkew3F, betaVIX: >= 15 days
+AHT_MONTHS, AHT_MIN_DAYS = 12, 100  # IdioVolAHT: 12 months of days, >= 100
+
+
+def add_daily_factor_signals(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `idio_vol_3f`, `return_skew_3f`, `realized_vol`, `idio_vol_aht`, `beta_vix`
+    from the daily factor-regression summaries (`data.real.FACTOR_SUMMARY_COLUMNS`;
+    OSAP's code). Days up to month_end only; NaN in months without factor data.
+
+    - `idio_vol_3f`: std (ddof 1) of the residuals of the month's daily FF3
+      regression, >= 15 days (IdioVol3F; Ang, Hodrick, Xing & Zhang 2006).
+    - `return_skew_3f`: skewness of those residuals (ReturnSkew3F; Bali, Engle &
+      Murray 2016). Residuals have mean 0 (intercept), so m3 / m2^1.5.
+    - `realized_vol`: std (ddof 1) of the month's daily excess returns, >= 15 days
+      (RealizedVol; Ang et al. 2006): total volatility, not residual.
+    - `idio_vol_aht`: root mean squared error (n - 2 dof) of a CAPM regression on the
+      daily excess returns of the last 12 calendar months, >= 100 days (IdioVolAHT;
+      Ali, Hwang & Trombley 2003). OSAP uses the last 252 trading days; 12 whole
+      months is about the same and an exact regression from the monthly sums.
+    - `beta_vix`: the month's slope on the daily VIX change with mktrf as a control,
+      >= 15 days (betaVIX; Ang et al. 2006). OSAP uses the last 20 trading days;
+      the month's ~21 days is about the same window.
+    """
+    panel = _sorted_by_stock(panel)
+    n = panel["xret_n"]
+    enough = n >= MIN_FACTOR_DAYS
+
+    m2 = panel["ff3_resid_sumsq"] / n
+    skew = (panel["ff3_resid_sumcube"] / n) / m2.where(m2 > 0) ** 1.5
+    xvar = (panel["xret_sumsq"] - panel["xret_sum"] ** 2 / n) / (n - 1)
+
+    sums = ["xret_n", "xret_sum", "xret_sumsq", "mkt_sum", "mkt_sumsq", "xret_mkt_sum"]
+    grids = {c: _calendar_grid(panel, c) for c in sums}
+    roll = {c: g.rolling(AHT_MONTHS, min_periods=1).sum() for c, g in grids.items()}
+    days = roll["xret_n"]
+    sxx = roll["mkt_sumsq"] - roll["mkt_sum"] ** 2 / days
+    sxy = roll["xret_mkt_sum"] - roll["mkt_sum"] * roll["xret_sum"] / days
+    syy = roll["xret_sumsq"] - roll["xret_sum"] ** 2 / days
+    ssr = (syy - sxy**2 / sxx.where(sxx > 0)).clip(lower=0)
+    rmse = np.sqrt(ssr / (days - 2)).where(days >= AHT_MIN_DAYS)
+
+    return _with(
+        panel,
+        idio_vol_3f=np.sqrt(panel["ff3_resid_sumsq"].clip(lower=0) / (n - 1)).where(enough),
+        return_skew_3f=skew.where(enough),
+        realized_vol=np.sqrt(xvar.clip(lower=0)).where(enough),
+        idio_vol_aht=_at_rows(rmse, panel, grids["xret_n"]),
+        beta_vix=panel["vix_beta"].where(panel["vix_n"] >= MIN_FACTOR_DAYS),
     )
 
 

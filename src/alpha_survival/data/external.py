@@ -170,6 +170,19 @@ def monthly_factors(raw_dir: Path = EXTERNAL_DIR) -> pd.DataFrame:
     return ff.join(ps, how="left").rename_axis("month_end")
 
 
+def daily_factors(raw_dir: Path = EXTERNAL_DIR) -> pd.DataFrame:
+    """Daily rf, mktrf, smb, hml and dvix, indexed by trading day (each known at that
+    day's close, so usable within its month).
+
+    `dvix`: change in the VIX close since the previous observation, NaN on days FRED
+    has no VIX (OSAP's d_vix). OSAP uses the older VXO until its 2021 end; we use VIX
+    throughout, the same idea on S&P 500 instead of S&P 100 options.
+    """
+    ff = load("ff3_daily", raw_dir).set_index("date")[["rf", "mktrf", "smb", "hml"]]
+    vix = load("vix", raw_dir).set_index("date")["value"]
+    return ff.join(vix.diff().rename("dvix"), how="left").rename_axis("date")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Download external series to Parquet.")
     parser.add_argument("--out-dir", type=Path, default=EXTERNAL_DIR)

@@ -95,6 +95,16 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     for col in ["netinc", "assets", "cashneq", "taxexp"]:  # quarterly block, suffix _q
         panel[f"{col}_q"] = panel[col] * rng.uniform(0.2, 0.3, len(panel))
     panel["filing_date_q"] = panel["month_end"] - pd.Timedelta(days=30)
+    # Daily factor-regression summaries (data.real.FACTOR_SUMMARY_COLUMNS).
+    panel["xret_n"] = panel["vix_n"] = 21
+    panel["xret_sum"] = rng.normal(0, 0.05, len(panel))
+    panel["xret_sumsq"] = 21 * rng.uniform(0.0002, 0.002, len(panel))
+    panel["mkt_sum"] = rng.normal(0, 0.03, len(panel))
+    panel["mkt_sumsq"] = 21 * rng.uniform(0.00005, 0.0002, len(panel))
+    panel["xret_mkt_sum"] = rng.normal(0, 0.001, len(panel))
+    panel["ff3_resid_sumsq"] = panel["xret_sumsq"] * rng.uniform(0.5, 0.9, len(panel))
+    panel["ff3_resid_sumcube"] = rng.normal(0, 1e-5, len(panel))
+    panel["vix_beta"] = rng.normal(0, 0.1, len(panel))
     return panel
 
 
@@ -189,7 +199,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 103
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 108
 
 
 def test_prepare_ranks_among_investable_stocks_only():

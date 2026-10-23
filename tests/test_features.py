@@ -1373,3 +1373,68 @@ def test_coskewness_by_hand_with_a_missing_month():
     got = out[out["permaticker"] == 0]["coskewness"]
     assert got.iloc[69] == pytest.approx(expected)
     assert got.iloc[:11].isna().all() and got.iloc[11:].notna().all()  # >= 12 months
+
+
+def daily_factor_panel(months=14, seed=0):
+    """One stock's daily excess returns and factors, and its panel of monthly summaries."""
+    from alpha_survival.data import real
+
+    rng = np.random.default_rng(seed)
+    dates = pd.bdate_range("2023-01-01", periods=months * 21 + 30)
+    dates = dates[dates < pd.Timestamp("2023-01-01") + pd.offsets.MonthEnd(months)]
+    factors = pd.DataFrame(
+        rng.normal(0, 0.01, (len(dates), 4)), index=dates, columns=["mktrf", "smb", "hml", "dvix"]
+    ).assign(rf=0.0001)
+    factors.index.name = "date"
+    daily = pd.DataFrame({"permaticker": 1, "date": dates, "month": dates.to_period("M")}).assign(
+        dret=0.5 * factors["mktrf"].to_numpy() + rng.normal(0, 0.02, len(dates))
+    )
+    sums = real.daily_factor_summaries(daily, factors).reset_index()
+    sums["month_end"] = sums["month"].dt.to_timestamp(how="end").dt.normalize()
+    return sums.drop(columns="month"), daily.join(factors, on="date")
+
+
+def test_daily_factor_signals_by_hand():
+    panel, d = daily_factor_panel()
+    out = features.add_daily_factor_signals(panel)
+    d["y"] = d["dret"] - d["rf"]
+    last = d[d["month"] == d["month"].max()]
+    design = np.column_stack([np.ones(len(last)), last[["mktrf", "smb", "hml"]]])
+    resid = last["y"] - design @ np.linalg.lstsq(design, last["y"], rcond=None)[0]
+    row = out.iloc[-1]
+    assert row["idio_vol_3f"] == pytest.approx(resid.std(ddof=1))
+    assert row["return_skew_3f"] == pytest.approx((resid**3).mean() / (resid**2).mean() ** 1.5)
+    assert row["realized_vol"] == pytest.approx(last["y"].std(ddof=1))
+    vix = np.column_stack([np.ones(len(last)), last[["mktrf", "dvix"]]])
+    assert row["beta_vix"] == pytest.approx(np.linalg.lstsq(vix, last["y"], rcond=None)[0][2])
+
+    year = d[d["month"] > d["month"].max() - 12]  # the last 12 calendar months
+    capm = np.column_stack([np.ones(len(year)), year["mktrf"]])
+    e = year["y"] - capm @ np.linalg.lstsq(capm, year["y"], rcond=None)[0]
+    assert row["idio_vol_aht"] == pytest.approx(np.sqrt((e**2).sum() / (len(year) - 2)))
+
+
+def test_daily_factor_signals_need_enough_days():
+    panel, _ = daily_factor_panel()
+    panel.loc[0, ["xret_n", "vix_n"]] = 14  # fewer than 15 days in the first month
+    out = features.add_daily_factor_signals(panel)
+    first = out.iloc[0]
+    cols = ["idio_vol_3f", "return_skew_3f", "realized_vol", "beta_vix"]
+    assert first[cols].isna().all() and out.iloc[1][cols].notna().all()
+    # IdioVolAHT needs >= 100 days: about 5 months of ~21 trading days.
+    aht = out["idio_vol_aht"]
+    days = panel["xret_n"].cumsum()
+    assert aht[days < 100].isna().all() and aht[days >= 100].notna().all()
+
+
+def test_daily_factor_signals_ignore_later_months():
+    # Leakage test: wild later months cannot move month t (IdioVolAHT rolls over 12).
+    panel, _ = daily_factor_panel()
+    t = 9
+    wild = panel.copy()
+    sums = [c for c in wild.columns if c not in ("permaticker", "month_end", "xret_n", "vix_n")]
+    wild.loc[t + 1 :, sums] = 7.0
+    cols = ["idio_vol_3f", "return_skew_3f", "realized_vol", "idio_vol_aht", "beta_vix"]
+    a = features.add_daily_factor_signals(panel).loc[t, cols]
+    b = features.add_daily_factor_signals(wild).loc[t, cols]
+    pd.testing.assert_series_equal(a, b)

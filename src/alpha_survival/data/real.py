@@ -12,7 +12,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from alpha_survival.data.external import daily_factors
 from alpha_survival.data.sharadar import RAW_DIR
+from alpha_survival.ols import solve_normal_equations
 
 # Sharadar column -> our column name.
 SECURITY_MASTER_COLUMNS = {
@@ -181,7 +183,9 @@ def corwin_schultz_spread(daily: pd.DataFrame) -> pd.Series:
     return spread.clip(lower=0).where(both).rename("cs_spread")
 
 
-def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
+def build_monthly_returns(
+    stocks: pd.DataFrame, master: pd.DataFrame, factors: pd.DataFrame | None = None
+) -> pd.DataFrame:
     """Turn daily `stocks` prices into one total return per stock per calendar month.
 
     The return for month m runs from the last close in month m-1 to the last
@@ -223,6 +227,9 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     - `n_trade_days`: days with a price row; `n_zero_volume`: those with no volume.
     - `cs_sum`, `cs_n`: sum and count of the month's Corwin-Schultz day-pair
       estimates (`corwin_schultz_spread`), for the BidAskSpread signal.
+
+    With daily `factors` (`data.external.daily_factors`), also the factor-regression
+    summaries of `daily_factor_summaries` (`FACTOR_SUMMARY_COLUMNS`).
     """
     if stocks.duplicated(["ticker", "date"]).any():
         raise ValueError("stocks has duplicate (ticker, date) rows")
@@ -275,6 +282,9 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
         )
     )
 
+    if factors is not None:
+        moments = moments.join(daily_factor_summaries(daily, factors), validate="one_to_one")
+
     monthly = (
         daily.drop(columns=["dret", "ar_product", "cs_spread", "high", "low", "volume"])
         .groupby(["permaticker", "month"], as_index=False)
@@ -302,7 +312,98 @@ def build_monthly_returns(stocks: pd.DataFrame, master: pd.DataFrame) -> pd.Data
     monthly["month_end"] = monthly["month"].dt.to_timestamp(how="end").dt.normalize()
     cols = ["permaticker", "month_end", "ret", "last_trade_date", "close_unadj", "close_split_adj"]
     cols += ["n_days", "dret_sum", "dret_sumsq", "ar_n", "ar_sum", *DAILY_SUMMARY_COLUMNS]
+    if factors is not None:
+        cols += FACTOR_SUMMARY_COLUMNS
     return monthly[cols].reset_index(drop=True)
+
+
+# Per-month summaries of daily factor regressions (see daily_factor_summaries).
+FACTOR_SUMMARY_COLUMNS = [
+    "xret_n",
+    "xret_sum",
+    "xret_sumsq",
+    "mkt_sum",
+    "mkt_sumsq",
+    "xret_mkt_sum",
+    "ff3_resid_sumsq",
+    "ff3_resid_sumcube",
+    "vix_n",
+    "vix_beta",
+]
+
+
+def _group_ols(
+    codes: np.ndarray, n_groups: int, y: np.ndarray, xs: list[np.ndarray], use: np.ndarray
+) -> np.ndarray:
+    """OLS of `y` on the columns `xs` within each group (`codes`), over rows where
+    `use` is True: (n_groups, len(xs)) coefficients, NaN where X'X is singular."""
+
+    def total(values: np.ndarray) -> np.ndarray:
+        return np.bincount(codes, weights=np.where(use, values, 0.0), minlength=n_groups)
+
+    k = len(xs)
+    xtx = np.empty((n_groups, k, k))
+    xty = np.empty((n_groups, k))
+    for i in range(k):
+        xty[:, i] = total(xs[i] * y)
+        for j in range(i, k):
+            xtx[:, i, j] = xtx[:, j, i] = total(xs[i] * xs[j])
+    return solve_normal_equations(xtx, xty)
+
+
+def daily_factor_summaries(daily: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame:
+    """Per (permaticker, month): summaries of daily excess returns y = dret - rf and
+    their factor regressions, over the month's days that have y and the FF3 factors.
+
+    `daily`: permaticker, month, date, dret. `factors`: daily rf, mktrf, smb, hml,
+    dvix indexed by date. Days without factors (e.g. after the Ken French file ends)
+    are left out, so a month after it has no count and no regression.
+    - `xret_n`, `xret_sum`, `xret_sumsq`: count, sum and sum of squares of y.
+    - `mkt_sum`, `mkt_sumsq`, `xret_mkt_sum`: sums of mktrf, mktrf^2 and y x mktrf,
+      enough for a CAPM regression over any run of months.
+    - `ff3_resid_sumsq`, `ff3_resid_sumcube`: sums of squared and cubed residuals of
+      the month's own regression of y on mktrf, smb, hml with an intercept.
+    - `vix_n`, `vix_beta`: days that also have a VIX change, and the month's slope of
+      y on dvix with mktrf as a control.
+    All from days within the month, so known at its end.
+    """
+    d = daily[["permaticker", "month", "date", "dret"]].join(factors, on="date")
+    groups = d.groupby(["permaticker", "month"], sort=True)
+    codes = groups.ngroup().to_numpy()
+    index = groups.size().index
+    n = len(index)
+
+    y = (d["dret"] - d["rf"]).to_numpy()
+    mkt, smb, hml = (d[c].to_numpy() for c in ["mktrf", "smb", "hml"])
+    dvix = d["dvix"].to_numpy()
+    ones = np.ones(len(d))
+    ff = ~np.isnan(y) & ~np.isnan(mkt) & ~np.isnan(smb) & ~np.isnan(hml)
+    vx = ff & ~np.isnan(dvix)
+
+    def total(values: np.ndarray, use: np.ndarray = ff) -> np.ndarray:
+        return np.bincount(codes, weights=np.where(use, values, 0.0), minlength=n)
+
+    b = _group_ols(codes, n, y, [ones, mkt, smb, hml], ff)
+    resid = y - b[codes, 0] - b[codes, 1] * mkt - b[codes, 2] * smb - b[codes, 3] * hml
+    fitted = ~np.isnan(b[:, 0])
+    vix_b = _group_ols(codes, n, y, [ones, mkt, dvix], vx)
+
+    out = pd.DataFrame(
+        {
+            "xret_n": total(ones),
+            "xret_sum": total(y),
+            "xret_sumsq": total(y * y),
+            "mkt_sum": total(mkt),
+            "mkt_sumsq": total(mkt * mkt),
+            "xret_mkt_sum": total(y * mkt),
+            "ff3_resid_sumsq": np.where(fitted, total(resid**2), np.nan),
+            "ff3_resid_sumcube": np.where(fitted, total(resid**3), np.nan),
+            "vix_n": total(ones, vx),
+            "vix_beta": vix_b[:, 2],
+        },
+        index=index,
+    )
+    return out
 
 
 # Extra per-month daily summaries for price/trading signals (see build_monthly_returns).
@@ -421,7 +522,7 @@ def load_monthly_returns(
         columns=["ticker", "date", "closeadj", "close", "closeunadj", "high", "low", "volume"],
         filters=[("ticker", "in", list(universe["ticker"]))],
     )
-    monthly = build_monthly_returns(stocks, master)
+    monthly = build_monthly_returns(stocks, master, daily_factors(raw_dir / "external"))
     actions = pd.read_parquet(raw_dir / "actions.parquet")
     monthly = add_delisting_returns(monthly, actions, master, penalise_unexplained)
     # Last, so a distress exit in the unfinished month doesn't warn as "unmatched".

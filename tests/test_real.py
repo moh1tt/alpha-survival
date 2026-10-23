@@ -846,3 +846,83 @@ def test_quarterly_fundamentals_join_point_in_time_with_suffix():
     assert list(out["filing_date_q"]) == list(pd.to_datetime(["2024-01-10"] * 2 + ["2024-02-29"]))
     assert {"period_end_q", "filing_date", "period_end"} <= set(out.columns)
     assert len(out) == len(panel)
+
+
+def factor_days(dates, seed=0):
+    rng = np.random.default_rng(seed)
+    out = pd.DataFrame(
+        rng.normal(0, 0.01, (len(dates), 4)), columns=["mktrf", "smb", "hml", "dvix"]
+    )
+    return out.assign(rf=0.0001, date=pd.to_datetime(dates)).set_index("date")
+
+
+def daily_rets(dates, seed=1, permaticker=1):
+    rng = np.random.default_rng(seed)
+    dates = pd.to_datetime(dates)
+    return pd.DataFrame(
+        {
+            "permaticker": permaticker,
+            "date": dates,
+            "month": dates.to_period("M"),
+            "dret": rng.normal(0, 0.02, len(dates)),
+        }
+    )
+
+
+def lstsq(y, *xs):
+    design = np.column_stack([np.ones(len(y)), *xs])
+    b = np.linalg.lstsq(design, y, rcond=None)[0]
+    return b, y - design @ b
+
+
+def test_daily_factor_summaries_by_hand():
+    dates = pd.bdate_range("2024-01-01", "2024-02-29")
+    factors = factor_days(dates).drop(dates[-3:])  # the factor file ends before the prices
+    factors.loc[dates[5], "dvix"] = np.nan  # a day without VIX
+    daily = daily_rets(dates)
+    out = real.daily_factor_summaries(daily, factors)
+
+    jan = daily[daily["month"] == "2024-01"].set_index("date")
+    f = factors.loc[jan.index]
+    y = (jan["dret"] - f["rf"]).to_numpy()
+    _, resid = lstsq(y, f["mktrf"], f["smb"], f["hml"])
+    row = out.loc[(1, pd.Period("2024-01", "M"))]
+    assert row["xret_n"] == len(y)
+    assert row["xret_sum"] == pytest.approx(y.sum())
+    assert row["xret_mkt_sum"] == pytest.approx((y * f["mktrf"]).sum())
+    assert row["ff3_resid_sumsq"] == pytest.approx((resid**2).sum())
+    assert row["ff3_resid_sumcube"] == pytest.approx((resid**3).sum())
+
+    has_vix = f["dvix"].notna().to_numpy()
+    b, _ = lstsq(y[has_vix], f["mktrf"][has_vix], f["dvix"][has_vix])
+    assert row["vix_n"] == has_vix.sum()
+    assert row["vix_beta"] == pytest.approx(b[2])
+
+    # February's last 3 days have no factors, so they are left out.
+    feb = out.loc[(1, pd.Period("2024-02", "M"))]
+    assert feb["xret_n"] == len(pd.bdate_range("2024-02-01", "2024-02-29")) - 3
+
+
+def test_daily_factor_summaries_ignore_later_days_and_other_stocks():
+    # Leakage test: a wild February or another stock cannot change stock 1's January.
+    dates = pd.bdate_range("2024-01-01", "2024-02-29")
+    factors = factor_days(dates)
+    base = daily_rets(dates)
+    wild = base.copy()
+    wild.loc[wild["month"] == "2024-02", "dret"] = 5.0
+    wild = pd.concat([wild, daily_rets(dates, seed=7, permaticker=2)], ignore_index=True)
+    wild_factors = factors.copy()
+    wild_factors.loc[factors.index.month == 2] = 0.5
+    jan = (1, pd.Period("2024-01", "M"))
+    a = real.daily_factor_summaries(base, factors).loc[jan]
+    b = real.daily_factor_summaries(wild, wild_factors).loc[jan]
+    pd.testing.assert_series_equal(a, b)
+
+
+def test_monthly_returns_carry_factor_summaries_only_when_given_factors():
+    dates = ["2024-01-31", "2024-02-01", "2024-02-29"]
+    prices = price_rows("AAA", dates, [100.0, 110.0, 99.0])
+    plain = real.build_monthly_returns(prices, master_for("AAA"))
+    assert not set(real.FACTOR_SUMMARY_COLUMNS) & set(plain.columns)
+    with_f = real.build_monthly_returns(prices, master_for("AAA"), factor_days(dates))
+    assert with_f["xret_n"].tolist() == [0, 2]  # January's only day has no return
