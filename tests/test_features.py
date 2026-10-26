@@ -1668,3 +1668,81 @@ def test_industry_signals_ignore_later_months():
     b = features.add_industry_signals(wild).loc[lambda d: d["month_end"] == t, cols]
     assert a["ind_mom"].notna().all()
     pd.testing.assert_frame_equal(a, b)
+
+
+def concentration_panel(n_months=25, seed=0):
+    """Stocks 1-2 in SIC 3571, 3 in 3572 (same 2-digit industry), 4 a utility (4911)."""
+    rng = np.random.default_rng(seed)
+    months = pd.date_range("2020-01-31", periods=n_months, freq="ME")
+    panel = pd.DataFrame([(s, m) for s in [1, 2, 3, 4] for m in months])
+    panel.columns = ["permaticker", "month_end"]
+    for col in ["revenue", "assets", "equity", "ppnenet"]:
+        panel[col] = rng.uniform(10, 100, len(panel))
+    panel["liabilities"] = panel["assets"] - panel["equity"]
+    panel["taxliabilities"] = rng.uniform(0, 5, len(panel))
+    panel["capex"] = -rng.uniform(1, 10, len(panel))
+    panel["fxusd"] = 1.0
+    panel["sic_code"] = panel["permaticker"].map({1: 3571.0, 2: 3571.0, 3: 3572.0, 4: 4911.0})
+    return panel
+
+
+def test_herf_is_own_mean_of_the_industry_sales_herfindahl():
+    panel = concentration_panel(n_months=14)
+    panel.loc[(panel["permaticker"] == 1) & (panel["month_end"] == "2020-03-31"), "fxusd"] = 2.0
+    out = features.add_industry_accounting(panel)
+    usd = panel["revenue"] / panel["fxusd"]
+    pair = panel["permaticker"].isin([1, 2])
+    share = usd[pair] / usd[pair].groupby(panel["month_end"][pair]).transform("sum")
+    monthly = (share**2).groupby(panel["month_end"][pair]).sum().to_numpy()
+    got = out.set_index(["permaticker", "month_end"])["herf"]
+    assert got.loc[2].iloc[11] == pytest.approx(monthly[:12].mean())  # 12 months: enough
+    assert got.loc[2].iloc[13] == pytest.approx(monthly[:14].mean())
+    assert got.loc[2].iloc[:11].isna().all()
+    assert got.loc[3].iloc[11] == pytest.approx(1.0)  # alone in SIC 3572
+    assert got.loc[4].isna().all()  # utilities excluded
+
+
+def test_herf_be_uses_book_equity_plus_tax_liabilities():
+    panel = concentration_panel(n_months=12)
+    panel.loc[panel["permaticker"] == 2, "equity"] = np.nan  # falls back to assets - liabilities
+    out = features.add_industry_accounting(panel).set_index(["permaticker", "month_end"])
+    book = panel["assets"] - panel["liabilities"]
+    book = book.where(panel["permaticker"] == 2, panel["equity"]) + panel["taxliabilities"]
+    pair = panel["permaticker"].isin([1, 2])
+    share = book[pair] / book[pair].groupby(panel["month_end"][pair]).transform("sum")
+    expected = (share**2).groupby(panel["month_end"][pair]).sum().mean()
+    assert out.loc[(1, panel["month_end"].iloc[11]), "herf_be"] == pytest.approx(expected)
+
+
+def test_ch_inv_ia_is_capex_growth_minus_the_sic2_mean():
+    panel = concentration_panel()
+    panel.loc[(panel["permaticker"] == 3) & (panel["month_end"] == "2020-01-31"), "capex"] = np.nan
+    out = features.add_industry_accounting(panel).set_index(["permaticker", "month_end"])
+    t = panel["month_end"].iloc[24]
+    capex = -panel.set_index(["permaticker", "month_end"])["capex"].unstack(0)
+    growth = {}
+    for s in [1, 2, 3]:
+        now, l12, l24 = capex[s].iloc[24], capex[s].iloc[12], capex[s].iloc[0]
+        if s == 3:
+            assert np.isnan(l24)  # no PP&E a year before the first month: 12-month growth
+            growth[s] = (now - l12) / l12
+        else:
+            growth[s] = (now - (l12 + l24) / 2) / ((l12 + l24) / 2)
+    mean = np.mean(list(growth.values()))
+    assert [out.loc[(s, t), "ch_inv_ia"] for s in [1, 2, 3]] == pytest.approx(
+        [growth[s] - mean for s in [1, 2, 3]]
+    )
+
+
+def test_industry_accounting_ignores_later_months():
+    # Leakage test: later filings cannot move month t.
+    panel = concentration_panel(n_months=30)
+    t = panel["month_end"].iloc[24]
+    wild = panel.copy()
+    later = wild["month_end"] > t
+    wild.loc[later, ["revenue", "assets", "equity", "capex", "ppnenet"]] = 1e9
+    cols = ["herf", "herf_asset", "herf_be", "ch_inv_ia"]
+    a = features.add_industry_accounting(panel).loc[lambda d: d["month_end"] == t, cols]
+    b = features.add_industry_accounting(wild).loc[lambda d: d["month_end"] == t, cols]
+    assert a.iloc[:3].notna().all().all()
+    pd.testing.assert_frame_equal(a, b)

@@ -29,6 +29,7 @@ from alpha_survival.features import (
     add_daily_price_signals,
     add_factor_betas,
     add_financing_signals,
+    add_industry_accounting,
     add_industry_signals,
     add_investment_growth,
     add_momentum,
@@ -161,7 +162,7 @@ def prepare(panel: pd.DataFrame, factors: pd.DataFrame | None = None) -> pd.Data
         factors = monthly_factors()
     panel = add_residual_momentum_coskewness(add_factor_betas(panel, factors), factors)
     panel = add_tail_risk_beta(add_coskew_acx_beta_fp(add_daily_factor_signals(panel)))
-    panel = add_industry_signals(add_price_delay(panel))
+    panel = add_industry_accounting(add_industry_signals(add_price_delay(panel)))
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
 

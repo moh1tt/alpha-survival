@@ -169,6 +169,11 @@ FEATURE_ACRONYMS = {
     # Step 71: industry momentum and big-firm industry return
     "ind_mom": "IndMom",
     "ind_ret_big": "IndRetBig",
+    # Step 72: industry concentration and industry-adjusted investment change
+    "herf": "Herf",
+    "herf_asset": "HerfAsset",
+    "herf_be": "HerfBE",
+    "ch_inv_ia": "ChInvIA",
 }
 
 

@@ -1508,6 +1508,60 @@ def add_industry_signals(panel: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+HERF_MONTHS, HERF_MIN = 36, 12  # Herf: own mean of the industry index, >= 12 of 36 months
+UTILITIES = (4900, 4999)  # Herf: regulated utilities (SIC 49) excluded
+
+
+def add_industry_accounting(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `herf`, `herf_asset`, `herf_be` and `ch_inv_ia` (OSAP's code). Industries
+    are today's SIC codes (data.real.add_industry_codes): approximate.
+
+    - `herf`: each month, the Herfindahl index of sales in the stock's 4-digit SIC
+      industry, sum of (firm sales / industry sales)^2 over the rows passed in;
+      the signal is the stock's own mean of it over the last 36 months (>= 12).
+      NaN for utilities, SIC 49 (Herf; Hou & Robinson 2006). OSAP's other
+      regulated-industry exclusions end by 1982, before our data.
+    - `herf_asset`, `herf_be`: the same with total assets and with book equity
+      (HerfAsset, HerfBE). Book equity: equity, or assets - liabilities, plus
+      `taxliabilities` for deferred taxes (as `book_leverage`); OSAP's preferred
+      stock terms are left out. All three in USD (`_usd`), as firms are summed.
+    - `ch_inv_ia`: % change in capex vs. the mean of 12 and 24 months ago (or vs.
+      12 months ago where that is missing), minus the month's mean of it over the
+      stock's 2-digit SIC industry (ChInvIA; Abarbanell & Bushee 1998). Capex is
+      -`capex` (see `add_investment_growth`), missing filled by the 12-month change
+      in net PP&E.
+    Same-month cross-sections and the stocks' own earlier rows: known at month_end.
+    """
+    panel = _sorted_by_stock(panel)
+    sic4 = [panel["month_end"], panel["sic_code"]]
+    utility = panel["sic_code"].between(*UTILITIES)
+
+    def herfindahl(values: pd.Series) -> pd.Series:
+        total = values.groupby(sic4).transform("sum")
+        index = ((values / total.where(total != 0)) ** 2).groupby(sic4).transform("sum")
+        index = index.where(panel["sic_code"].notna())
+        return _own_rolling(panel, index, HERF_MONTHS, HERF_MIN).where(~utility)
+
+    book = panel["equity"].fillna(panel["assets"] - panel["liabilities"])
+    book = (book + panel["taxliabilities"].fillna(0)) / panel["fxusd"].where(panel["fxusd"] > 0)
+
+    def ago(values: str | pd.Series, months: int) -> pd.Series:
+        return _months_ago(panel, values, months)
+
+    capex = (-panel["capex"]).fillna(panel["ppnenet"] - ago("ppnenet", 12))
+    before, year_ago = (ago(capex, 12) + ago(capex, 24)) / 2, ago(capex, 12)
+    change = (capex - before) / before.where(before != 0)
+    change = change.fillna((capex - year_ago) / year_ago.where(year_ago != 0))
+    sic2 = [panel["month_end"], panel["sic_code"] // SIC2]
+    return _with(
+        panel,
+        herf=herfindahl(_usd(panel, "revenue")),
+        herf_asset=herfindahl(_usd(panel, "assets")),
+        herf_be=herfindahl(book),
+        ch_inv_ia=change - change.groupby(sic2).transform("mean"),
+    )
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 
