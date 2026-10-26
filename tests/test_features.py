@@ -1807,3 +1807,96 @@ def test_abnormal_accruals_ignores_later_months():
     assert a.notna().any()
     assert a.to_numpy() == pytest.approx(b.to_numpy(), nan_ok=True)
 
+
+def surprise_by_hand(x, t):
+    """The OSAP seasonal-random-walk surprise at index t of a monthly series x."""
+    g = lambda i: x[i] - x[i - 12] if i >= 12 else np.nan  # noqa: E731
+
+    def s(i):
+        past = [v for k in range(3, 25, 3) if i - k >= 0 and not np.isnan(v := g(i - k))]
+        return g(i) - (np.mean(past) if past else np.nan)
+
+    past = [s(t - k) for k in range(3, 25, 3) if t - k >= 0]
+    return s(t) / np.nanstd(past, ddof=1)
+
+
+def surprise_panel(n_months=48, seed=0, n_firms=1):
+    rng = np.random.default_rng(seed)
+    months = pd.date_range("2018-01-31", periods=n_months, freq="ME")
+    panel = pd.DataFrame([(s, m) for s in range(1, n_firms + 1) for m in months])
+    panel.columns = ["permaticker", "month_end"]
+    quarter = np.repeat(rng.normal(1, 0.5, (n_firms * n_months + 2) // 3 + 1), 3)
+    panel["eps_q"] = quarter[: len(panel)]  # each quarter's value held for 3 months
+    panel["revenue_q"] = rng.uniform(50, 100, len(panel))
+    panel["sharesbas_q"] = rng.uniform(5, 10, len(panel))
+    panel["eps"] = rng.normal(2, 1, len(panel))
+    panel["market_cap"] = rng.uniform(1e8, 1e9, len(panel))
+    panel["fama_industry"] = "Computers"
+    return panel
+
+
+def test_earnings_surprise_by_hand():
+    panel = surprise_panel()
+    panel.loc[20, "eps_q"] = np.nan  # a missing quarter drops out of the means
+    out = features.add_earnings_surprises(panel)
+    x = panel["eps_q"].to_numpy()
+    for t in [30, 40, 47]:
+        assert out["earnings_surprise"].iloc[t] == pytest.approx(surprise_by_hand(x, t))
+    assert out["earnings_surprise"].iloc[:18].isna().all()  # no two past surprises yet
+
+
+def test_revenue_surprise_is_the_same_on_revenue_per_share():
+    panel = surprise_panel()
+    out = features.add_earnings_surprises(panel)
+    x = (panel["revenue_q"] / panel["sharesbas_q"]).to_numpy()
+    assert out["revenue_surprise"].iloc[45] == pytest.approx(surprise_by_hand(x, 45))
+
+
+def test_earn_sup_big_is_the_big_firms_mean_surprise_for_the_rest():
+    panel = surprise_panel(n_months=36, n_firms=10)
+    t = pd.Timestamp("2020-12-31")
+    caps = dict(zip(range(1, 11), np.arange(1, 11) * 1e8, strict=True))
+    panel.loc[panel["month_end"] == t, "market_cap"] = panel["permaticker"].map(caps)
+    out = features.add_earnings_surprises(panel)
+    now = out[out["month_end"] == t].set_index("permaticker")
+    big = now.loc[[7, 8, 9, 10], "earnings_surprise"].mean()  # ranks 0.7 .. 1.0
+    assert now.loc[1:6, "earn_sup_big"].to_numpy() == pytest.approx([big] * 6)
+    assert now.loc[7:10, "earn_sup_big"].isna().all()
+
+
+def test_earnings_consistency_by_hand_and_exclusions():
+    months = pd.date_range("2015-12-31", periods=6 * 12 + 1, freq="ME")
+    eps = np.repeat([1.0, 1.1, 1.3, 1.4, 1.6, 1.8, 2.0], 12)[: len(months)]
+    panel = pd.DataFrame({"permaticker": 1, "month_end": months, "eps": eps})
+    for col in ["eps_q", "revenue_q", "sharesbas_q", "market_cap"]:
+        panel[col] = 1.0
+    panel["fama_industry"] = "Computers"
+    out = features.add_earnings_surprises(panel)["earnings_consistency"]
+    annual = [1.0, 1.1, 1.3, 1.4, 1.6, 1.8, 2.0]
+    growth = [
+        (annual[y] - annual[y - 1]) / (0.5 * (abs(annual[y - 1]) + abs(annual[y - 2])))
+        for y in range(2, 7)
+    ]
+    assert out.iloc[72] == pytest.approx(np.mean(growth))  # this year and the 4 before
+    assert out.iloc[24] == pytest.approx(growth[0])  # only one year of growth so far
+
+    falls = panel.assign(eps=np.where(panel["month_end"] >= "2021-12-31", 1.5, eps))
+    out = features.add_earnings_surprises(falls)["earnings_consistency"]
+    assert np.isnan(out.iloc[72])  # growth turned negative after positive growth
+    jumps = panel.assign(eps=np.where(panel["month_end"] >= "2021-12-31", 20.0, eps))
+    out = features.add_earnings_surprises(jumps)["earnings_consistency"]
+    assert np.isnan(out.iloc[72])  # EPS more than 6 times last year's
+
+
+def test_earnings_surprises_ignore_later_months():
+    # Leakage test: later filings and caps cannot move month t.
+    panel = surprise_panel(n_months=48, n_firms=10)
+    t = pd.Timestamp("2020-12-31")
+    wild = panel.copy()
+    later = wild["month_end"] > t
+    wild.loc[later, ["eps_q", "revenue_q", "eps", "market_cap"]] = 1e6
+    cols = ["earnings_surprise", "revenue_surprise", "earn_sup_big", "earnings_consistency"]
+    a = features.add_earnings_surprises(panel).loc[lambda d: d["month_end"] == t, cols]
+    b = features.add_earnings_surprises(wild).loc[lambda d: d["month_end"] == t, cols]
+    assert a[["earnings_surprise", "revenue_surprise"]].notna().all().all()
+    pd.testing.assert_frame_equal(a, b)

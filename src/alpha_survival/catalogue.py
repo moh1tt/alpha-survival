@@ -176,6 +176,11 @@ FEATURE_ACRONYMS = {
     "ch_inv_ia": "ChInvIA",
     # Step 73: abnormal accruals
     "abnormal_accruals": "AbnormalAccruals",
+    # Step 74: earnings and revenue surprises
+    "earnings_surprise": "EarningsSurprise",
+    "revenue_surprise": "RevenueSurprise",
+    "earn_sup_big": "EarnSupBig",
+    "earnings_consistency": "EarningsConsistency",
 }
 
 

@@ -1614,6 +1614,93 @@ def add_abnormal_accruals(panel: pd.DataFrame) -> pd.DataFrame:
     return _with(panel, abnormal_accruals=resid)
 
 
+SURPRISE_LAGS = range(3, 25, 3)  # EarningsSurprise: the last 8 quarters' surprises
+MIN_SURPRISE_SD = 1e-8  # EarningsSurprise: a flat history has no scale
+CONSISTENCY_YEARS = 4  # EarningsConsistency: this year's growth and the 4 before
+CONSISTENCY_MAX_RATIO = 6  # EarningsConsistency: |EPS / EPS a year ago| above 6 excluded
+
+
+def _lag_moments(grid: pd.DataFrame, lags: range) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Mean and std (ddof 1) of `grid` shifted by each of `lags` months, over the
+    lags with a value (NaN with none, std NaN with one)."""
+    total = count = squares = 0
+    for lag in lags:
+        shifted = grid.shift(lag)
+        total = total + shifted.fillna(0)
+        squares = squares + (shifted**2).fillna(0)
+        count = count + shifted.notna()
+    n = count.where(count > 0)
+    var = (squares - total**2 / n) / (n - 1).where(n > 1)
+    return total / n, np.sqrt(var.clip(lower=0))
+
+
+def _standardised_surprise(panel: pd.DataFrame, values: pd.Series) -> pd.Series:
+    """OSAP's seasonal random walk with drift: growth g = x - x 12 months earlier;
+    surprise = g - mean(g 3, 6, .. 24 months ago), over the std of the surprises
+    3, 6, .. 24 months ago (each over the lags available)."""
+    keys = panel[["permaticker", "month_end"]].assign(v=values)
+    grid = _calendar_grid(keys, "v")
+    growth = grid - grid.shift(12)
+    drift, _ = _lag_moments(growth, SURPRISE_LAGS)
+    surprise = growth - drift
+    _, sd = _lag_moments(surprise, SURPRISE_LAGS)
+    standard = surprise / sd.where(sd > MIN_SURPRISE_SD)
+    return pd.Series(_at_rows(standard, keys, grid), index=panel.index)
+
+
+def add_earnings_surprises(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `earnings_surprise`, `revenue_surprise`, `earn_sup_big`, `earnings_consistency`
+    (OSAP's code). The latest public quarter (`_q`) or trailing year on each month's
+    row; lags are the stock's own rows that many calendar months earlier.
+
+    - `earnings_surprise`: quarterly EPS vs. the same quarter a year before, minus
+      the mean of that change over the last 8 quarters, over the std of the last 8
+      such surprises (EarningsSurprise; Foster, Olsen & Shevlin 1984).
+    - `revenue_surprise`: the same with quarterly revenue per share, revenue over
+      basic shares (RevenueSurprise; Jegadeesh & Livnat 2006).
+    - `earn_sup_big`: the mean `earnings_surprise` of the largest 30% of firms by
+      market cap (percentile rank >= 0.7) in the Fama-French 48 industry this month,
+      for the other firms; NaN for the big ones (EarnSupBig; Hou 2007). Today's
+      industry codes: approximate.
+    - `earnings_consistency`: mean over this year and the 4 before (each 12 months
+      apart, those available) of EPS growth, (EPS - EPS a year ago) / mean of |EPS| one
+      and two years ago, on trailing-year EPS (EarningsConsistency; Alwathainani
+      2009). NaN if EPS now or a year ago is missing, |EPS / EPS a year ago| > 6, or
+      growth changed sign since a year ago (or is negative after a missing year).
+    Sharadar's EPS is basic EPS, net income to common (OSAP: excluding extraordinary
+    items). Known at month_end.
+    """
+    panel = _sorted_by_stock(panel)
+    earnings = _standardised_surprise(panel, panel["eps_q"])
+    shares = panel["sharesbas_q"].where(panel["sharesbas_q"] > 0)
+    revenue = _standardised_surprise(panel, panel["revenue_q"] / shares)
+
+    mcap = panel["market_cap"].where(panel["market_cap"] > 0)
+    ff48 = [panel["month_end"], panel["fama_industry"]]
+    big = mcap.groupby(ff48).rank(pct=True) >= BIG_FIRMS
+    big_mean = earnings.where(big).groupby(ff48).transform("mean")
+
+    def ago(values: str | pd.Series, months: int) -> pd.Series:
+        return _months_ago(panel, values, months)
+
+    eps, eps_1y, eps_2y = panel["eps"], ago("eps", 12), ago("eps", 24)
+    scale = 0.5 * (eps_1y.abs() + eps_2y.abs())
+    growth = ((eps - eps_1y) / scale.where(scale != 0)).replace([np.inf, -np.inf], np.nan)
+    past = [ago(growth, 12 * y) for y in range(1, CONSISTENCY_YEARS + 1)]
+    consistency = pd.concat([growth, *past], axis=1).mean(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        jump = (eps / eps_1y).abs() > CONSISTENCY_MAX_RATIO
+    flipped = ((growth > 0) & (past[0] < 0)) | ((growth < 0) & ~(past[0] <= 0))
+    excluded = eps.isna() | eps_1y.isna() | jump | flipped
+    return _with(
+        panel,
+        earnings_surprise=earnings,
+        revenue_surprise=revenue,
+        earn_sup_big=big_mean.where(~big),
+        earnings_consistency=consistency.where(~excluded),
+    )
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 
