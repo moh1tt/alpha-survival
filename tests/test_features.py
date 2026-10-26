@@ -2030,3 +2030,57 @@ def test_event_signals_ignore_later_months():
     b = features.add_event_signals(wild)
     pd.testing.assert_frame_equal(a, b.loc[b["month_end"] == "2020-08-31", cols])
     assert a["exch_switch"].sum() == 2
+
+
+def ipo_panel():
+    """Stock 1 in the data from its start; 2 lists in month 10 with no R&D; 3 in month 10
+    with R&D; 4 in month 12."""
+    months = pd.date_range("2000-01-31", periods=60, freq="ME")
+    first = {1: 0, 2: 10, 3: 10, 4: 12}
+    rows = [(s, m) for s, f in first.items() for m in months[f:]]
+    panel = pd.DataFrame(rows, columns=["permaticker", "month_end"])
+    rng = np.random.default_rng(0)
+    panel["ret"] = rng.normal(0.01, 0.05, len(panel))
+    panel["rnd"] = np.where(panel["permaticker"] == 3, 5.0, 0.0)
+    panel["close_unadj"] = 20.0
+    return panel, months
+
+
+def test_ind_ipo_and_rd_ipo_flag_months_after_the_first_month_in_the_data():
+    panel, months = ipo_panel()
+    out = features.add_ipo_signals(panel)
+    s2 = div_series(out, 2, "ind_ipo")
+    assert s2.loc[months[13] : months[46]].eq(1).all()  # months 3 .. 36 after month 10
+    assert s2.loc[: months[12]].eq(0).all() and s2.loc[months[47] :].eq(0).all()
+    assert div_series(out, 1, "ind_ipo").eq(0).all()  # listed before our data start
+    r2, r3 = div_series(out, 2, "rd_ipo"), div_series(out, 3, "rd_ipo")
+    assert r2.loc[months[17] : months[46]].eq(1).all()  # months 7 .. 36, no R&D
+    assert r2.loc[: months[16]].eq(0).all()
+    assert r3.eq(0).all()  # reports R&D
+
+
+def test_firm_age_mom_is_six_month_momentum_of_the_youngest_fifth():
+    panel, months = ipo_panel()
+    panel.loc[(panel["permaticker"] == 4) & (panel["month_end"] == months[40]), "ret"] = np.nan
+    out = features.add_ipo_signals(panel)
+    t = months[43]
+    now = out[out["month_end"] == t].set_index("permaticker")["firm_age_mom"]
+    # Ages 44, 34, 34, 32: the youngest fifth of four stocks is stock 4 alone.
+    rets = panel[panel["permaticker"] == 4].set_index("month_end")["ret"].fillna(0)
+    expected = np.prod(1 + rets.loc[months[38] : months[42]]) - 1
+    assert now.loc[4] == pytest.approx(expected)
+    assert now.drop(4).isna().all()
+    young = out[out["month_end"] == months[20]].set_index("permaticker")["firm_age_mom"]
+    assert np.isnan(young.loc[4])  # 9 months in the data: under 12
+
+
+def test_ipo_signals_ignore_later_months():
+    # Leakage test: later returns cannot move month t.
+    panel, months = ipo_panel()
+    t = months[43]
+    wild = panel.copy()
+    wild.loc[wild["month_end"] > t, "ret"] = 9.0
+    cols = ["ind_ipo", "rd_ipo", "firm_age_mom"]
+    a = features.add_ipo_signals(panel).loc[lambda d: d["month_end"] == t, cols]
+    b = features.add_ipo_signals(wild).loc[lambda d: d["month_end"] == t, cols]
+    pd.testing.assert_frame_equal(a, b)

@@ -189,6 +189,10 @@ FEATURE_ACRONYMS = {
     # Step 76: exchange switches and spin-offs
     "exch_switch": "ExchSwitch",
     "spinoff": "Spinoff",
+    # Step 77: IPOs and young-firm momentum
+    "ind_ipo": "IndIPO",
+    "rd_ipo": "RDIPO",
+    "firm_age_mom": "FirmAgeMom",
 }
 
 

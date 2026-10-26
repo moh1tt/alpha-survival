@@ -1838,6 +1838,59 @@ def add_event_signals(panel: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+IPO_WINDOW = (3, 36)  # IndIPO: months 3 to 36 after the IPO
+RDIPO_WINDOW = (7, 36)  # RDIPO: months 7 to 36 after the IPO
+FIRMAGEMOM_MIN_AGE = 12  # FirmAgeMom: at least 12 months in the data
+FIRMAGEMOM_LAGS = (1, 5)  # FirmAgeMom: return over months t-5 .. t-1
+MIN_PRICE_FIRMAGEMOM = 5.0  # FirmAgeMom: OSAP's $5 price screen
+
+
+def add_ipo_signals(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `ind_ipo`, `rd_ipo` and `firm_age_mom` (OSAP's code), with the stock's first
+    month in our data standing in for its IPO date (OSAP: Ritter's IPO dates).
+
+    A stock already in the panel's first month listed before our data start, so it
+    counts as no IPO (0), as OSAP does for stocks without an IPO date. A stock that
+    first appears later may be a new listing rather than an IPO (an uplisting from
+    OTC, a spin-off, a relisting): approximate.
+    - `ind_ipo`: 1 in months 3 to 36 after the IPO month, else 0 (IndIPO; Ritter 1991).
+    - `rd_ipo`: 1 in months 7 to 36 after the IPO for firms reporting zero R&D, else
+      0 (RDIPO; Gou, Lev & Shi 2006). Sharadar reports no R&D as 0.
+    - `firm_age_mom`: the return over months t-5 .. t-1 (a missing return on a row
+      the stock has counts as 0, as OSAP), for the youngest fifth of firms by months
+      in the data each month, among those with 12 or more months and a price of at
+      least $5 (or none); NaN otherwise (FirmAgeMom; Zhang 2006). Our data start in
+      Dec 1997, so ages are truncated for older firms, which only puts them in the
+      oldest fifths.
+    Uses the stock's own months up to month_end.
+    """
+    panel = _sorted_by_stock(panel)
+    listed = _months_listed(panel)
+    since = listed - 1
+    first_month = panel.groupby("permaticker")["month_end"].transform("min")
+    ipo = first_month > panel["month_end"].min()
+    ind_ipo = (ipo & since.between(*IPO_WINDOW)).astype(float)
+    rd_ipo = (ipo & since.between(*RDIPO_WINDOW) & (panel["rnd"] == 0)).astype(float)
+
+    rets = _calendar_grid(panel.assign(_r=panel["ret"].fillna(0)), "_r")
+    growth = pd.DataFrame(1.0, index=rets.index, columns=rets.columns)
+    for lag in range(FIRMAGEMOM_LAGS[0], FIRMAGEMOM_LAGS[1] + 1):
+        growth = growth * (1 + rets.shift(lag))
+    mom = pd.Series(_at_rows(growth - 1, panel, rets), index=panel.index)
+    price = panel["close_unadj"]
+    eligible = (listed >= FIRMAGEMOM_MIN_AGE) & ((price >= MIN_PRICE_FIRMAGEMOM) | price.isna())
+    age = listed.where(eligible)
+    fifth = age.groupby(panel["month_end"]).transform(
+        lambda v: pd.qcut(v, 5, labels=False, duplicates="drop") + 1
+    )
+    return _with(
+        panel,
+        ind_ipo=ind_ipo,
+        rd_ipo=rd_ipo,
+        firm_age_mom=mom.where(fifth == 1),
+    )
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 

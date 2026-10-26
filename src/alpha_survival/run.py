@@ -36,6 +36,7 @@ from alpha_survival.features import (
     add_industry_accounting,
     add_industry_signals,
     add_investment_growth,
+    add_ipo_signals,
     add_momentum,
     add_past_returns,
     add_price_delay,
@@ -168,7 +169,7 @@ def prepare(panel: pd.DataFrame, factors: pd.DataFrame | None = None) -> pd.Data
     panel = add_tail_risk_beta(add_coskew_acx_beta_fp(add_daily_factor_signals(panel)))
     panel = add_industry_accounting(add_industry_signals(add_price_delay(panel)))
     panel = add_dividend_signals(add_earnings_surprises(add_abnormal_accruals(panel)))
-    panel = add_event_signals(panel)
+    panel = add_ipo_signals(add_event_signals(panel))
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
 
