@@ -1426,6 +1426,9 @@ def add_price_delay(panel: pd.DataFrame) -> pd.DataFrame:
     - `price_delay_tstat` (D3): D2 with t-statistics, sum(n t_n) / (t0 + sum(t_n)),
       as the paper and OSAP's Python code (its Stata code divides by b0). We skip
       OSAP's Stata 10/90 trim: the rank normalisation already tames outliers.
+      D3 ranks stocks almost exactly as D2 does: each t_n is b_n over the stock's
+      residual s.d. (which cancels in the ratio) times a market-only factor that is
+      nearly the same for today and every lag. So their scores match; not a bug.
     The values sit on July's row (one month skipped, as the paper) and the next 11,
     so each row only uses days up to the June before it.
     """
