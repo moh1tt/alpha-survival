@@ -181,6 +181,11 @@ FEATURE_ACRONYMS = {
     "revenue_surprise": "RevenueSurprise",
     "earn_sup_big": "EarnSupBig",
     "earnings_consistency": "EarningsConsistency",
+    # Step 75: dividends
+    "div_init": "DivInit",
+    "div_omit": "DivOmit",
+    "div_season": "DivSeason",
+    "div_yield_st": "DivYieldST",
 }
 
 

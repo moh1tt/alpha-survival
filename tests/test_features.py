@@ -1900,3 +1900,92 @@ def test_earnings_surprises_ignore_later_months():
     b = features.add_earnings_surprises(wild).loc[lambda d: d["month_end"] == t, cols]
     assert a[["earnings_surprise", "revenue_surprise"]].notna().all().all()
     pd.testing.assert_frame_equal(a, b)
+
+
+def dividend_panel(schedules, start="2000-01-31", n_months=48, price=20.0):
+    """Monthly rows for each stock in `schedules` ({permaticker: {month index: amount}}),
+    with dividends run through data.real.build_action_months as on real data."""
+    from alpha_survival.data import real
+
+    months = pd.date_range(start, periods=n_months, freq="ME")
+    stocks = list(schedules)
+    panel = pd.DataFrame([(s, m) for s in stocks for m in months])
+    panel.columns = ["permaticker", "month_end"]
+    panel["close_split_adj"] = price
+    rows = [
+        {
+            "ticker": f"T{s}",
+            "action": "dividend",
+            "date": months[i] - pd.Timedelta(days=5),
+            "value": v,
+        }
+        for s, schedule in schedules.items()
+        for i, v in schedule.items()
+    ]
+    master = pd.DataFrame({"ticker": [f"T{s}" for s in stocks], "permaticker": stocks})
+    return real.add_action_months(panel, real.build_action_months(pd.DataFrame(rows), master))
+
+
+def div_series(out, stock, column):
+    return out[out["permaticker"] == stock].set_index("month_end")[column]
+
+
+def test_div_init_flags_six_months_after_a_first_dividend_in_24_months():
+    panel = dividend_panel({1: {29: 0.5}, 2: {2: 0.5, 29: 0.5}, 3: {20: 0.5, 23: 0.5, 29: 0.5}})
+    out = features.add_dividend_signals(panel)
+    for stock in [1, 2]:  # stock 2's earlier dividend is 27 months back: an initiation
+        s = div_series(out, stock, "div_init")
+        assert s.iloc[:24].isna().all()  # burn-in: no 24 months of dividend data yet
+        assert s.iloc[29:35].eq(1).all()
+        assert s.iloc[24:29].eq(0).all() and s.iloc[35:].eq(0).all()
+    assert div_series(out, 3, "div_init").iloc[29:35].eq(0).all()  # not a first dividend
+
+
+def test_div_omit_flags_a_stopped_quarterly_dividend():
+    quarterly = {i: 0.25 for i in range(0, 40, 3)}  # every 3 months to month 39
+    panel = dividend_panel({1: quarterly, 2: {i: 0.25 for i in range(0, 48, 3)}})
+    out = features.add_dividend_signals(panel)
+    s = div_series(out, 1, "div_omit")
+    assert s.iloc[:36].isna().all()  # burn-in
+    assert s.iloc[[42, 43]].eq(1).all()  # no dividend at 42: omitted at t, then t-1
+    assert s.drop(s.index[[42, 43]]).iloc[36:].eq(0).all()
+    assert div_series(out, 2, "div_omit").iloc[36:].eq(0).all()  # still paying
+
+
+def test_div_season_expects_next_months_dividend_by_frequency():
+    quarterly = {i: 0.25 for i in range(2, 48, 3)}  # months 2, 5, 8, ...
+    semi = {i: 0.5 for i in range(5, 48, 6)}  # months 5, 11, 17, ...
+    monthly = {i: 0.1 for i in range(48)}
+    out = features.add_dividend_signals(dividend_panel({1: quarterly, 2: semi, 3: monthly}))
+    q = div_series(out, 1, "div_season")
+    assert q.iloc[:12].isna().all()  # burn-in
+    assert q.iloc[12:].tolist() == [1.0 if (t + 1) % 3 == 2 else 0.0 for t in range(12, 48)]
+    s = div_series(out, 2, "div_season")
+    assert s.iloc[12:].tolist() == [1.0 if (t + 1) % 6 == 5 else 0.0 for t in range(12, 48)]
+    assert div_series(out, 3, "div_season").isna().all()  # monthly payers excluded
+
+
+def test_div_yield_st_terciles_of_the_expected_dividend_yield():
+    t = 30  # quarterly payers whose last dividend was 2 months before t
+    schedules = {s: {i: 0.1 * s for i in range(t - 26, t - 1, 3)} for s in range(1, 7)}
+    schedules[7] = {i: 0.5 for i in range(t - 25, t, 3)}  # paid 1 month ago: none due
+    schedules[8] = {}  # never pays
+    out = features.add_dividend_signals(dividend_panel(schedules))
+    now = out[out["month_end"] == out["month_end"].unique()[t]].set_index("permaticker")
+    assert now.loc[1:6, "div_yield_st"].tolist() == [1, 1, 2, 2, 3, 3]
+    assert now.loc[7, "div_yield_st"] == 0
+    assert np.isnan(now.loc[8, "div_yield_st"])
+
+
+def test_dividend_signals_ignore_later_months():
+    # Leakage test: later dividends and prices cannot move month t.
+    schedules = {s: {i: 0.1 * s for i in range(s % 3, 40, 3)} for s in range(1, 7)}
+    panel = dividend_panel(schedules)
+    t = panel["month_end"].unique()[38]
+    wild = dividend_panel({s: {**v, 39: 5.0, 40: 7.0} for s, v in schedules.items()})
+    wild.loc[wild["month_end"] > t, "close_split_adj"] = 0.01
+    cols = ["div_init", "div_omit", "div_season", "div_yield_st"]
+    a = features.add_dividend_signals(panel).loc[lambda d: d["month_end"] == t, cols]
+    b = features.add_dividend_signals(wild).loc[lambda d: d["month_end"] == t, cols]
+    assert a.notna().all().all()
+    pd.testing.assert_frame_equal(a, b)

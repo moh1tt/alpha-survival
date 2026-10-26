@@ -996,3 +996,45 @@ def test_price_delay_sums_by_hand():
                 assert row[f"pd_xx{i}{j}"] == pytest.approx(xu[:, i] @ xu[:, j])
     # The file's first 4 days have no 4-day lag; the stock's first day has no return.
     assert out.iloc[0]["pd_xx00"] == (daily["month"] == "2024-01").sum() - 4
+
+
+def test_action_months_sum_dividends_and_infer_their_frequency():
+    actions = pd.DataFrame(
+        {
+            "ticker": ["AAA"] * 5 + ["BBB"] * 3 + ["ZZZ"],
+            "action": ["dividend"] * 8 + ["dividend"],
+            "date": pd.to_datetime(
+                ["2020-01-15", "2020-04-15", "2020-04-28", "2020-10-15", "2022-01-10"]
+                + ["2020-01-05", "2020-02-05", "2020-03-05", "2020-01-01"]
+            ),
+            "value": [0.1, 0.2, 0.5, 0.3, 0.4, 0.01, 0.01, 0.01, 9.0],
+        }
+    )
+    actions = pd.concat(
+        [actions, actions.iloc[[0]].assign(action="split", value=2.0)], ignore_index=True
+    )
+    master = real.build_security_master(raw_tickers())  # AAA = 101, BBB = 202; no ZZZ
+    out = real.build_action_months(actions, master).set_index(["permaticker", "month_end"])
+    aaa = out.loc[101]
+    assert aaa["div_amount"].tolist() == pytest.approx([0.1, 0.7, 0.3, 0.4])  # April summed
+    # First dividend unknown (0); gaps of 3, 6 and 15 months: quarterly, semi, unknown.
+    assert aaa["div_freq"].tolist() == [0, 3, 4, 0]
+    assert out.loc[202, "div_freq"].tolist() == [0, 2, 2]  # monthly
+    assert set(out.index.get_level_values(0)) == {101, 202}  # ZZZ is not ours
+
+
+def test_action_months_only_use_earlier_dividends():
+    # Leakage test: a later dividend cannot change an earlier month's frequency.
+    base = pd.DataFrame(
+        {
+            "ticker": "AAA",
+            "action": "dividend",
+            "date": pd.to_datetime(["2020-01-15", "2020-04-15"]),
+            "value": [0.1, 0.1],
+        }
+    )
+    later = pd.concat([base, base.iloc[[0]].assign(date=pd.Timestamp("2020-05-15"))])
+    master = real.build_security_master(raw_tickers())
+    a = real.build_action_months(base, master)
+    b = real.build_action_months(later, master).iloc[:2]
+    pd.testing.assert_frame_equal(a, b.reset_index(drop=True))

@@ -98,6 +98,9 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     for col in ["netinc", "assets", "cashneq", "taxexp", "eps", "revenue"]:  # quarterly, _q
         panel[f"{col}_q"] = panel[col] * rng.uniform(0.2, 0.3, len(panel))
     panel["sharesbas_q"] = panel["sharesbas"]
+    quarter_end = panel["month_end"].dt.month % 3 == 0  # quarterly dividends
+    panel["div_amount"] = np.where(quarter_end, 0.25, np.nan)
+    panel["div_freq"] = np.where(quarter_end, 3.0, np.nan)
     panel["filing_date_q"] = panel["month_end"] - pd.Timedelta(days=30)
     # Daily factor-regression summaries (data.real.FACTOR_SUMMARY_COLUMNS).
     panel["xret_n"] = panel["vix_n"] = 21
@@ -222,7 +225,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 125
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 129
 
 
 def test_prepare_ranks_among_investable_stocks_only():

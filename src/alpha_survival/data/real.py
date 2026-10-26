@@ -854,6 +854,48 @@ def add_industry_codes(panel: pd.DataFrame, master: pd.DataFrame) -> pd.DataFram
     return panel.merge(codes, on="permaticker", how="left", validate="many_to_one")
 
 
+# Dividend frequency codes as CRSP's cd3, inferred from the months since the stock's
+# previous dividend month (Sharadar has no frequency field): (max gap, code).
+DIVIDEND_FREQUENCIES = [(1, 2), (4, 3), (8, 4), (14, 5)]  # monthly, quarterly, semi, annual
+UNKNOWN_FREQUENCY = 0  # first dividend, or a gap over 14 months
+
+
+def build_action_months(actions: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
+    """Per (permaticker, month_end) with a dividend: `div_amount`, the sum of the
+    month's cash dividends per share (Sharadar's are split-adjusted like `close`, so
+    divide by `close_split_adj`), and `div_freq`, a CRSP-style frequency code from
+    the months since the previous dividend month (`DIVIDEND_FREQUENCIES`; the first
+    dividend, or one after 14 months, is `UNKNOWN_FREQUENCY`). Dated by the ex-date,
+    so known by that month's end; uses only that and earlier dividends.
+    Sharadar does not mark special dividends: all count, unlike OSAP's ordinary ones.
+    """
+    ids = master.set_index("ticker")["permaticker"]
+    div = actions.loc[actions["action"] == "dividend", ["ticker", "date", "value"]]
+    div = div.assign(permaticker=div["ticker"].map(ids), month=div["date"].dt.to_period("M"))
+    months = (
+        div.dropna(subset=["permaticker", "value"])
+        .groupby(["permaticker", "month"], as_index=False)["value"]
+        .sum()
+        .rename(columns={"value": "div_amount"})
+    )
+    index = months["month"].dt.year * 12 + months["month"].dt.month
+    gap = index - index.groupby(months["permaticker"]).shift(1)
+    freq = pd.Series(UNKNOWN_FREQUENCY, index=months.index)
+    for limit, code in reversed(DIVIDEND_FREQUENCIES):
+        freq[gap <= limit] = code
+    months["div_freq"] = freq
+    months["month_end"] = months.pop("month").dt.to_timestamp(how="end").dt.normalize()
+    months["permaticker"] = months["permaticker"].astype("int64")
+    return months[["permaticker", "month_end", "div_amount", "div_freq"]]
+
+
+def add_action_months(panel: pd.DataFrame, action_months: pd.DataFrame) -> pd.DataFrame:
+    """Join `build_action_months` onto the panel; months without one are NaN."""
+    keys = ["permaticker", "month_end"]
+    months = action_months.astype({"month_end": panel["month_end"].dtype})
+    return panel.merge(months, on=keys, how="left", validate="one_to_one")
+
+
 def load_panel(
     raw_dir: Path = RAW_DIR,
     as_of: pd.Timestamp | None = None,
@@ -871,5 +913,8 @@ def load_panel(
     if quarterly:
         arq = load_fundamentals(monthly, raw_dir, "ARQ", QUARTERLY_FIELDS)
         panel = add_quarterly_fundamentals(panel, arq)
-    panel = add_industry_codes(add_market_cap(panel), load_security_master(raw_dir))
+    master = load_security_master(raw_dir)
+    panel = add_industry_codes(add_market_cap(panel), master)
+    actions = pd.read_parquet(raw_dir / "actions.parquet")
+    panel = add_action_months(panel, build_action_months(actions, master))
     return flag_investable(panel, min_price)

@@ -1701,6 +1701,101 @@ def add_earnings_surprises(panel: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+DIVINIT_QUIET, DIVINIT_MONTHS = 24, 6  # DivInit: first dividend in 24 months, last 6 months
+# DivOmit: (k, L) a regular payer of one dividend every k months over the last L months.
+DIVOMIT_RULES = [(3, 18), (6, 18), (12, 24)]
+DIV_BURN_IN = {"div_init": 24, "div_omit": 36, "div_season": 12, "div_yield_st": 12}
+QUARTERLY_LIKE = (0, 1, 3)  # DivSeason, DivYieldST: unknown or quarterly frequency
+# DivSeason: months back that put a dividend in month t+1, by frequency code.
+SEASON_LAGS = {3: (2, 5, 8, 11), 4: (5, 11), 5: (11,)}
+EXPECTED_LAG = {3: 2, 4: 5, 5: 11}  # DivYieldST: last dividend expected to repeat at t+1
+
+
+def add_dividend_signals(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `div_init`, `div_omit`, `div_season`, `div_yield_st` (OSAP's code) from the
+    monthly cash dividends (`div_amount`, `div_freq`: data.real.build_action_months).
+
+    Windows are the stock's own calendar months; a month without a dividend is 0.
+    Dividend data start with the panel, so each signal is NaN until it has a full
+    window after the panel's first month (`DIV_BURN_IN`): before that, "no dividend
+    in the last 24 months" would just mean no data.
+    - `div_init`: 1 if in one of the last 6 months the stock paid its first dividend
+      in 24 months, else 0 (DivInit; Michaely, Thaler & Womack 1995).
+    - `div_omit`: 1 if the stock just stopped a regular dividend: for k = 3, 6, 12, it
+      paid in the k months to t-1 but none in the k to t, after a run where every
+      k-month window held exactly one dividend (18, 18, 24 months, ending k months
+      ago); 1 only if that happened at exactly one of t-1 and t (DivOmit; same paper).
+    - `div_season`: 1 if a dividend is due next month by the stock's frequency
+      (quarterly or unknown: paid 2, 5, 8 or 11 months ago; semi-annual: 5 or 11;
+      annual: 11), 0 if it paid in the last 12 months but none is due, NaN if it
+      paid none; monthly payers NaN (DivSeason; Hartzmark & Salomon 2013).
+    - `div_yield_st`: the dividend expected next month (the one 2, 5 or 11 months
+      ago by frequency) over the month-end split-adjusted price, in terciles 1-3
+      each month over the positive ones, 0 if none expected; only for stocks that
+      paid in the last 12 months, monthly payers NaN (DivYieldST; Litzenberger &
+      Ramaswamy 1979).
+    Frequency codes are inferred (see data.real.DIVIDEND_FREQUENCIES), and Sharadar
+    does not mark special dividends: approximate. Known at month_end.
+    """
+    panel = _sorted_by_stock(panel)
+    keys = panel[["permaticker", "month_end"]]
+    amount = _calendar_grid(keys.assign(v=panel["div_amount"].fillna(0)), "v")
+    exists = amount.notna()
+    paid = (amount > 0).astype(float).where(exists)
+    freq = _calendar_grid(keys.assign(v=panel["div_freq"]), "v").where(paid > 0)
+    freq = freq.ffill().where(exists)
+
+    def window_sum(grid: pd.DataFrame, months: int) -> pd.DataFrame:
+        return grid.rolling(months, min_periods=1).sum().where(exists)
+
+    quiet = window_sum(paid, DIVINIT_QUIET).shift(1)
+    first = ((paid > 0) & (quiet == 0)).astype(float)
+    div_init = first.rolling(DIVINIT_MONTHS, min_periods=1).max().where(exists)
+
+    omit_now = pd.DataFrame(False, index=paid.index, columns=paid.columns)
+    for k, run in DIVOMIT_RULES:
+        count = window_sum(paid, k)
+        regular = (count == 1).astype(float).where(exists)
+        payer = regular.rolling(run, min_periods=1).min() == 1
+        omit_now |= (count == 0) & (count.shift(1) > 0) & payer.shift(k, fill_value=False)
+    div_omit = (omit_now.astype(float).rolling(2, min_periods=1).sum() == 1).astype(float)
+    div_omit = div_omit.where(exists)
+
+    recent = window_sum(paid, 12) > 0
+    due = pd.DataFrame(False, index=paid.index, columns=paid.columns)
+    for code, lags in SEASON_LAGS.items():
+        like = freq.isin(QUARTERLY_LIKE) if code == 3 else freq == code
+        for lag in lags:
+            due |= like & (paid.shift(lag) > 0)
+    seasonal = freq.notna() & (freq != 2)
+    div_season = due.astype(float).where(recent | due).where(seasonal & exists)
+
+    expected = pd.DataFrame(np.nan, index=paid.index, columns=paid.columns)
+    for code, lag in EXPECTED_LAG.items():
+        like = freq.isin(QUARTERLY_LIKE) | freq.isna() if code == 3 else freq == code
+        expected = expected.mask(like, amount.shift(lag))
+    price = _calendar_grid(panel, "close_split_adj")
+    yield_ = expected / price.where(price > 0)
+    yield_ = yield_.where(recent & (freq != 2) & exists)
+    positive = yield_.where(yield_ > 0)
+    tercile = positive.apply(
+        lambda row: pd.qcut(row, 3, labels=False, duplicates="drop") + 1, axis=1
+    )
+    div_yield_st = tercile.mask(yield_ == 0, 0.0)
+
+    out = {}
+    start = amount.index[0]
+    for name, grid in [
+        ("div_init", div_init),
+        ("div_omit", div_omit),
+        ("div_season", div_season),
+        ("div_yield_st", div_yield_st),
+    ]:
+        ready = amount.index >= start + pd.offsets.MonthEnd(DIV_BURN_IN[name])
+        out[name] = _at_rows(grid.where(pd.Series(ready, index=grid.index), axis=0), keys, amount)
+    return _with(panel, **out)
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 
