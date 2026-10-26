@@ -2084,3 +2084,58 @@ def test_ipo_signals_ignore_later_months():
     a = features.add_ipo_signals(panel).loc[lambda d: d["month_end"] == t, cols]
     b = features.add_ipo_signals(wild).loc[lambda d: d["month_end"] == t, cols]
     pd.testing.assert_frame_equal(a, b)
+
+
+def intan_panel(n_firms=8, n_months=61, seed=0):
+    rng = np.random.default_rng(seed)
+    months = pd.date_range("2000-01-31", periods=n_months, freq="ME")
+    panel = pd.DataFrame([(s, m) for s in range(1, n_firms + 1) for m in months])
+    panel.columns = ["permaticker", "month_end"]
+    panel["ret"] = rng.normal(0.01, 0.06, len(panel))
+    panel["market_cap"] = rng.uniform(1e8, 1e9, len(panel))
+    for col in ["equity", "revenue", "netinc", "depamor"]:
+        panel[col] = rng.uniform(1e7, 1e8, len(panel))
+    panel["fxusd"] = 1.0
+    return panel, months
+
+
+def test_intan_bm_is_the_residual_of_five_year_returns_on_book_to_market():
+    panel, months = intan_panel()
+    panel.loc[(panel["permaticker"] == 2) & (panel["month_end"] == months[30]), "ret"] = np.nan
+    out = features.add_intangible_returns(panel)
+    wide = {c: panel.pivot(index="month_end", columns="permaticker", values=c) for c in panel}
+    r = (1 + wide["ret"].fillna(0).iloc[1:61]).prod() - 1  # months 1 .. 60
+    x_now = np.log(wide["equity"].iloc[60] / wide["market_cap"].iloc[60])
+    x_then = np.log(wide["equity"].iloc[0] / wide["market_cap"].iloc[0])
+    keep = r[(r > r.min()) & (r < r.max())].index  # 8 firms: the trim drops min and max
+    design = np.column_stack([np.ones(len(keep)), x_then[keep], (x_now - x_then + r)[keep]])
+    y = r[keep].to_numpy()
+    resid = y - design @ np.linalg.lstsq(design, y, rcond=None)[0]
+    now = out[out["month_end"] == months[60]].set_index("permaticker")
+    assert now.loc[keep, "intan_bm"].to_numpy() == pytest.approx(resid)
+    assert now.drop(keep)["intan_bm"].isna().all()
+    assert out.loc[out["month_end"] < months[60], "intan_bm"].isna().all()  # 60 months back
+
+
+def test_comp_equ_iss_is_market_cap_growth_minus_the_return():
+    panel, months = intan_panel()
+    out = features.add_intangible_returns(panel)
+    one = panel[panel["permaticker"] == 3].set_index("month_end")
+    r = (1 + one["ret"].iloc[1:61]).prod() - 1
+    expected = np.log(one["market_cap"].iloc[60] / one["market_cap"].iloc[0]) - r
+    got = out[(out["permaticker"] == 3) & (out["month_end"] == months[60])]["comp_equ_iss"]
+    assert got.item() == pytest.approx(expected)
+
+
+def test_intangible_returns_ignore_later_months():
+    # Leakage test: later returns, caps and filings cannot move month t.
+    panel, months = intan_panel(n_months=64)
+    t = months[60]
+    wild = panel.copy()
+    later = wild["month_end"] > t
+    wild.loc[later, ["ret", "market_cap", "equity", "netinc"]] = 9.0
+    cols = ["intan_bm", "intan_sp", "intan_cfp", "intan_ep", "comp_equ_iss"]
+    a = features.add_intangible_returns(panel).loc[lambda d: d["month_end"] == t, cols]
+    b = features.add_intangible_returns(wild).loc[lambda d: d["month_end"] == t, cols]
+    assert a["comp_equ_iss"].notna().all()
+    pd.testing.assert_frame_equal(a, b)

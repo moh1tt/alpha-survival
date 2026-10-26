@@ -193,6 +193,12 @@ FEATURE_ACRONYMS = {
     "ind_ipo": "IndIPO",
     "rd_ipo": "RDIPO",
     "firm_age_mom": "FirmAgeMom",
+    # Step 78: intangible returns and composite equity issuance
+    "intan_bm": "IntanBM",
+    "intan_sp": "IntanSP",
+    "intan_cfp": "IntanCFP",
+    "intan_ep": "IntanEP",
+    "comp_equ_iss": "CompEquIss",
 }
 
 

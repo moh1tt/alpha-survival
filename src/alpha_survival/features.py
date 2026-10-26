@@ -1562,6 +1562,24 @@ def add_industry_accounting(panel: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _group_residuals(
+    keys: pd.DataFrame, y: pd.Series, xs: list[pd.Series], min_obs: int
+) -> pd.Series:
+    """Residuals of an OLS of `y` on `xs` with an intercept within each group of the
+    `keys` columns, over rows with every value (NaN elsewhere, and in groups with
+    fewer than `min_obs` such rows)."""
+    use = y.notna() & pd.concat(xs, axis=1).notna().all(axis=1) & keys.notna().all(axis=1)
+    codes = keys[use].groupby(list(keys.columns)).ngroup()
+    codes = codes[codes.map(codes.value_counts()) >= min_obs]
+    rows, c = codes.index, codes.to_numpy()
+    cols = [np.ones(len(rows)), *(x[rows].to_numpy() for x in xs)]
+    yv = y[rows].to_numpy()
+    b = group_ols(c, int(c.max(initial=-1)) + 1, yv, cols, np.ones(len(rows), bool))
+    resid = pd.Series(np.nan, index=y.index)
+    resid[rows] = yv - sum(b[c, i] * cols[i] for i in range(len(cols)))
+    return resid
+
+
 ABACC_MIN_FIRMS = 6  # AbnormalAccruals: >= 6 firms in the industry-month regression
 ABACC_TRIM = (0.001, 0.999)  # AbnormalAccruals: inputs outside the month's 0.1-99.9% dropped
 
@@ -1597,20 +1615,9 @@ def add_abnormal_accruals(panel: pd.DataFrame) -> pd.DataFrame:
     high = by_month.transform("quantile", ABACC_TRIM[1])
     inputs = inputs.where((inputs >= low) & (inputs <= high))
 
-    use = inputs.notna().all(axis=1) & panel["sic_code"].notna()
-    groups = pd.Series(np.nan, index=panel.index)
-    keys = pd.DataFrame({"m": panel["month_end"], "s": panel["sic_code"] // SIC2})[use]
-    groups[use] = keys.groupby(["m", "s"]).ngroup()
-    size = groups.map(groups.value_counts())
-    use &= size >= ABACC_MIN_FIRMS
-    codes = groups[use].astype(int).to_numpy()
-    rows = inputs[use]
-    xs = [np.ones(len(rows)), *(rows[c].to_numpy() for c in ["inv_assets", "d_revenue", "ppe"])]
-    y = rows["accruals"].to_numpy()
-    b = group_ols(codes, int(codes.max(initial=-1)) + 1, y, xs, np.ones(len(y), bool))
-    fitted = sum(b[codes, i] * xs[i] for i in range(len(xs)))
-    resid = pd.Series(np.nan, index=panel.index)
-    resid[use] = y - fitted
+    keys = pd.DataFrame({"m": panel["month_end"], "s": panel["sic_code"] // SIC2})
+    xs = [inputs[c] for c in ["inv_assets", "d_revenue", "ppe"]]
+    resid = _group_residuals(keys, inputs["accruals"], xs, ABACC_MIN_FIRMS)
     return _with(panel, abnormal_accruals=resid)
 
 
@@ -1889,6 +1896,61 @@ def add_ipo_signals(panel: pd.DataFrame) -> pd.DataFrame:
         rd_ipo=rd_ipo,
         firm_age_mom=mom.where(fifth == 1),
     )
+
+
+INTAN_MONTHS = 60  # Intan*, CompEquIss: five years
+INTAN_TRIM = (0.01, 0.99)  # Intan*: five-year returns outside the month's 1-99% dropped
+INTAN_MIN_FIRMS = 3  # Intan*: enough firms to fit an intercept and two slopes
+
+
+def add_intangible_returns(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `intan_bm`, `intan_sp`, `intan_cfp`, `intan_ep` and `comp_equ_iss`
+    (Daniel & Titman 2006; OSAP's code).
+
+    r = the stock's compounded return over the last 60 months (a missing return on a
+    row the stock has counts as 0, as OSAP), with a row 60 months back required.
+    - `intan_*`: for x = log(fundamental / market cap), positive ratios only, the
+      residual of each month's cross-sectional regression of r on x 60 months ago
+      and the "tangible return" x - x 60 months ago + r (IntanBM, IntanSP, IntanCFP,
+      IntanEP: book equity, revenue, net income + D&A, net income). The part of a
+      five-year return that accounting growth does not explain. Fundamentals in USD
+      (`_usd`). r is trimmed at each month's 1st/99th percentiles; OSAP trims over
+      the whole sample at once, which mixes in later months.
+    - `comp_equ_iss`: log growth of market cap over 60 months minus r, the growth
+      that came from issuing shares rather than returns (CompEquIss).
+    Rows up to month_end only.
+    """
+    panel = _sorted_by_stock(panel)
+    keys = panel[["permaticker", "month_end"]]
+    logs = _calendar_grid(keys.assign(v=np.log1p(panel["ret"].fillna(0))), "v")
+    exists = logs.notna()
+    total = logs.fillna(0).cumsum()
+    five_year = np.exp(total - total.shift(INTAN_MONTHS)) - 1
+    five_year = five_year.where(exists & exists.shift(INTAN_MONTHS, fill_value=False))
+    r = pd.Series(_at_rows(five_year, keys, logs), index=panel.index)
+    by_month = r.groupby(panel["month_end"])
+    low = by_month.transform("quantile", INTAN_TRIM[0])
+    high = by_month.transform("quantile", INTAN_TRIM[1])
+    trimmed = r.where((r >= low) & (r <= high))
+
+    mcap = panel["market_cap"].where(panel["market_cap"] > 0)
+    numerators = {
+        "intan_bm": _usd(panel, "equity"),
+        "intan_sp": _usd(panel, "revenue"),
+        "intan_cfp": _usd(panel, "netinc") + _usd(panel, "depamor"),
+        "intan_ep": _usd(panel, "netinc"),
+    }
+    month = panel[["month_end"]]
+    added = {}
+    for name, numerator in numerators.items():
+        ratio = numerator / mcap
+        x = np.log(ratio.where(ratio > 0))
+        x_then = _months_ago(panel, x, INTAN_MONTHS)
+        tangible = x - x_then + r
+        added[name] = _group_residuals(month, trimmed, [x_then, tangible], INTAN_MIN_FIRMS)
+    cap_then = _months_ago(panel, mcap, INTAN_MONTHS)
+    added["comp_equ_iss"] = np.log(mcap / cap_then) - r
+    return _with(panel, **added)
 
 
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
