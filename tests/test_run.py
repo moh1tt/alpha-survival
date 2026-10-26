@@ -178,6 +178,7 @@ def test_evaluate_scores_each_model_the_right_way():
     long_lags += ["firm_age_mom"]  # every fixture stock has the same age: no youngest fifth
     long_lags += ["intan_bm", "intan_sp", "intan_cfp", "intan_ep", "comp_equ_iss"]  # 60
     long_lags += ["mean_rank_rev_growth", "rd_cap"]  # 60 and 48 months back
+    long_lags += ["rd_ability"]  # 6 annual pairs: 72 months and more
     empty = table.loc[signals, "n_forecasts"] == 0
     assert set(empty[empty].index) <= {f"signal_{c}" for c in long_lags}
     assert table.loc[empty[empty].index, "mean_ic"].isna().all()
@@ -231,7 +232,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 145
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 148
 
 
 def test_prepare_ranks_among_investable_stocks_only():

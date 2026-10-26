@@ -2263,3 +2263,119 @@ def test_more_accounting_signals_ignore_later_months():
     a, b = (d.loc[d["month_end"] == t, names] for d in (a, b))
     assert a[["equity_duration", "inv_growth", "var_cf"]].notna().all().all()
     pd.testing.assert_frame_equal(a, b)
+
+
+def quality_panel(n_firms=5, n_months=25, seed=0):
+    rng = np.random.default_rng(seed)
+    months = pd.date_range("2000-01-31", periods=n_months, freq="ME")
+    panel = pd.DataFrame([(s, m) for s in range(1, n_firms + 1) for m in months])
+    panel.columns = ["permaticker", "month_end"]
+    for col in ["assets", "revenue", "equity", "assetsc", "liabilitiesc", "debtnc"]:
+        panel[col] = rng.uniform(50, 150, len(panel))
+    for col in ["sgna", "rnd", "netinc", "ncfo", "taxexp", "intexp"]:
+        panel[col] = rng.uniform(1, 20, len(panel))
+    panel["sharesbas"] = 100.0
+    panel["market_cap"] = rng.uniform(100, 1000, len(panel))
+    panel["fxusd"] = 1.0
+    panel["sic_code"] = 3571.0
+    panel["fama_industry"] = "Computers"
+    factors = pd.DataFrame({"gnpdef": np.linspace(100, 110, n_months)}, index=months)
+    return panel, factors, months
+
+
+def test_org_cap_is_perpetual_inventory_sga_standardised_in_the_industry():
+    panel, factors, months = quality_panel()
+    out = features.add_organisation_quality(panel, factors)
+    t = 24
+    ratios = {}
+    for s in range(1, 6):
+        one = panel[panel["permaticker"] == s].reset_index(drop=True)
+        sga = (one["sgna"] + one["rnd"]) / factors["gnpdef"].to_numpy()
+        stock = list(4 * sga[:12])
+        for i in range(12, 25):
+            stock.append(0.85 * stock[i - 12] + sga[i])
+        ratios[s] = stock[t] / one.loc[t, "assets"]
+    r = pd.Series(ratios)  # 5 firms: the 1st/99th percentile clip keeps them all
+    expected = (r - r.mean()) / r.std()
+    got = out[out["month_end"] == months[t]].set_index("permaticker")["org_cap"]
+    assert got.to_numpy() == pytest.approx(expected.to_numpy())
+
+
+def test_org_cap_excludes_financials():
+    panel, factors, _ = quality_panel()
+    panel.loc[panel["permaticker"] == 1, "sic_code"] = 6022.0
+    out = features.add_organisation_quality(panel, factors)
+    assert out.loc[out["permaticker"] == 1, "org_cap"].isna().all()
+
+
+def test_ps_scores_nine_tests_for_the_highest_book_to_market():
+    panel, factors, months = quality_panel(n_firms=10, n_months=13)
+    t = months[12]
+    now = panel["month_end"] == t
+    panel.loc[now, "market_cap"] = panel.loc[now, "equity"] * np.linspace(0.1, 2, 10)
+    one = (panel["permaticker"] == 1) & now  # highest B/M: market cap lowest
+    then = (panel["permaticker"] == 1) & (panel["month_end"] == months[0])
+    panel.loc[then, ["netinc", "assets", "debtnc", "assetsc", "liabilitiesc"]] = [
+        1,
+        100,
+        50,
+        50,
+        50,
+    ]
+    panel.loc[then, ["revenue", "taxexp", "intexp"]] = [100, 1, 1]
+    panel.loc[one, ["netinc", "ncfo", "assets", "debtnc", "assetsc", "liabilitiesc"]] = [
+        5,
+        9,
+        100,
+        10,
+        80,
+        40,
+    ]
+    panel.loc[one, ["revenue", "taxexp", "intexp", "sharesbas"]] = [200, 1, 1, 90]
+    out = features.add_organisation_quality(panel, factors)
+    got = out[out["month_end"] == t].set_index("permaticker")["ps"]
+    assert got.loc[1] == 9  # every test passes
+    assert got.loc[3:].isna().all()  # outside the top fifth of B/M
+    panel.loc[one, "ncfo"] = -1.0  # fails cash flow > 0 and cash flow > profit
+    out = features.add_organisation_quality(panel, factors)
+    assert out[(out["permaticker"] == 1) & (out["month_end"] == t)]["ps"].item() == 7
+
+
+def test_rd_ability_is_the_mean_slope_of_growth_on_lagged_rd():
+    rng = np.random.default_rng(1)
+    panel, factors, months = quality_panel(n_firms=3, n_months=12 * 13 + 1)
+    panel["revenue"] = rng.uniform(80, 120, len(panel))
+    panel["rnd"] = panel["revenue"] * np.repeat([0.01, 0.05, 0.2], len(months))
+    panel["rnd"] *= rng.uniform(0.5, 1.5, len(panel))
+    out = features.add_organisation_quality(panel, factors)
+    t = len(months) - 1
+    one = panel[panel["permaticker"] == 3].reset_index(drop=True)
+    y = np.log(one["revenue"] / one["revenue"].shift(12))
+    x = np.log1p(one["rnd"] / one["revenue"])
+    slopes = []
+    for n in range(1, 6):
+        points = [t - 12 * k for k in range(8)]
+        xs, ys = x[[p - 12 * n for p in points]].to_numpy(), y[points].to_numpy()
+        ok = ~np.isnan(xs) & ~np.isnan(ys)
+        if ok.sum() >= 6:
+            slopes.append(np.polyfit(xs[ok], ys[ok], 1)[0])
+    got = out[(out["permaticker"] == 3) & (out["month_end"] == months[t])]["rd_ability"]
+    assert got.item() == pytest.approx(np.mean(slopes))
+    others = out[(out["permaticker"] < 3) & (out["month_end"] == months[t])]["rd_ability"]
+    assert others.isna().all()  # not in the top third of R&D intensity
+
+
+def test_organisation_quality_ignores_later_months():
+    # Leakage test: later filings, caps and deflators cannot move month t.
+    panel, factors, months = quality_panel(n_firms=10, n_months=28)
+    t = months[24]
+    wild, wild_factors = panel.copy(), factors.copy()
+    later = wild["month_end"] > t
+    wild.loc[later, ["sgna", "rnd", "assets", "revenue", "netinc", "market_cap"]] = 1e6
+    wild_factors.loc[wild_factors.index > t, "gnpdef"] = 1.0
+    cols = ["org_cap", "ps", "rd_ability"]
+    a = features.add_organisation_quality(panel, factors)
+    b = features.add_organisation_quality(wild, wild_factors)
+    a, b = (d.loc[d["month_end"] == t, cols] for d in (a, b))
+    assert a["org_cap"].notna().all()
+    pd.testing.assert_frame_equal(a, b)

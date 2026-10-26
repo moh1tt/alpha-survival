@@ -206,6 +206,10 @@ FEATURE_ACRONYMS = {
     "mean_rank_rev_growth": "MeanRankRevGrowth",
     "rd_cap": "RDcap",
     "var_cf": "VarCF",
+    # Step 80: organisation capital, F-score, R&D ability
+    "org_cap": "OrgCap",
+    "ps": "PS",
+    "rd_ability": "RDAbility",
 }
 
 

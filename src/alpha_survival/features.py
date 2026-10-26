@@ -2071,6 +2071,143 @@ def add_more_accounting_signals(panel: pd.DataFrame, factors: pd.DataFrame) -> p
     )
 
 
+ORGCAP_DEPRECIATION = 0.85  # OrgCap: organisation capital kept each year
+ORGCAP_START = 4.0  # OrgCap: initial stock = 4 x the first year's SG&A
+ORGCAP_CLIP = (1, 99)  # OrgCap: winsorised at the month's 1st/99th percentiles
+RDABILITY_YEARS, RDABILITY_MIN = 8, 6  # RDAbility: >= 6 of the last 8 annual points
+RDABILITY_LAGS = range(1, 6)  # RDAbility: R&D 1 .. 5 years before the sales growth
+RDABILITY_MIN_SHARE = 0.5  # RDAbility: R&D in at least half of those years
+
+
+def _stata_value(values: pd.Series) -> pd.Series:
+    """`values` with missing (or infinite) as +infinity, as Stata compares them (and
+    OSAP's PS code): "x > 0" passes when x is missing, "x < 0" fails."""
+    return values.replace([np.inf, -np.inf], np.nan).fillna(np.inf)
+
+
+def add_organisation_quality(panel: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame:
+    """Add `org_cap`, `ps` and `rd_ability` (OSAP's code) on the latest public filings;
+    lags are the stock's own rows 12, 24, .. months earlier. `factors`: monthly
+    `gnpdef` (data.external).
+
+    - `org_cap`: organisation capital from SG&A (incl. R&D, as Compustat's xsga) in
+      real dollars, by perpetual inventory: 4 x SG&A in the stock's first 12 months,
+      then 0.85 x the value a year earlier + this year's SG&A; over assets,
+      winsorised at the month's 1st/99th percentiles and standardised within the
+      Fama-French 48 industry (OSAP: 17) that month; financials (SIC 6000-6999)
+      excluded (OrgCap; Eisfeldt & Papanikolaou 2013). OSAP keeps only
+      December fiscal year-ends; our trailing-year filings need no such filter.
+    - `ps`: Piotroski's F-score, nine 0/1 tests (profit, cash flow, rising ROA, cash
+      flow above profit, falling long-term leverage, rising current ratio, rising
+      margin, rising asset turnover, no new shares), for the top fifth of
+      book-to-market only (PS; Piotroski 2000). A missing comparison counts as
+      passing a "> 0" test, as in OSAP's Stata logic. Margin = EBIT (net income +
+      tax + interest) / revenue, its change vs. a year ago (OSAP's code divides this
+      year's EBIT by last year's revenue, a slip we do not copy).
+    - `rd_ability`: for n = 1 .. 5, the slope of log sales growth on log(1 + R&D /
+      sales) n years earlier over the last 8 annual points (12, 24, .. months apart,
+      >= 6 pairs, R&D in at least half the years); their mean, for firms in the
+      top third of R&D / sales among R&D spenders that month (RDAbility; Cohen,
+      Diether & Malloy 2013). OSAP runs it on fiscal years; ours on the annual
+      points before each month.
+    Known at month_end.
+    """
+    panel = _sorted_by_stock(panel)
+    months = panel["month_end"]
+    keys = panel[["permaticker", "month_end"]]
+
+    def ago(values: str | pd.Series, lag: int) -> pd.Series:
+        return _months_ago(panel, values, lag)
+
+    sga = (panel["sgna"].fillna(0) + panel["rnd"].fillna(0)) / months.map(factors["gnpdef"])
+    flow = _calendar_grid(keys.assign(v=sga), "v")
+    exists = flow.notna().to_numpy()
+    first = np.where(exists.any(axis=0), exists.argmax(axis=0), len(flow))
+    values, stock = flow.to_numpy(), np.full(flow.shape, np.nan)
+    for i in range(len(flow)):
+        age = i - first
+        start = (age >= 0) & (age < 12)
+        stock[i, start] = ORGCAP_START * values[i, start]
+        if i >= 12:
+            later = age >= 12
+            stock[i, later] = ORGCAP_DEPRECIATION * stock[i - 12, later] + values[i, later]
+    capital = pd.Series(_at_rows(pd.DataFrame(stock), keys, flow), index=panel.index)
+    ratio = capital / panel["assets"].where(panel["assets"] > 0)
+    ratio = ratio.where(ratio != 0)
+
+    def clip(v: pd.Series) -> pd.Series:
+        valid = v.dropna()
+        if len(valid) <= 1:
+            return v
+        low = np.percentile(valid, ORGCAP_CLIP[0], method="lower")
+        high = np.percentile(valid, ORGCAP_CLIP[1], method="higher")
+        return v.clip(low, high)
+
+    clipped = ratio.groupby(months).transform(clip)
+    industry = [months, panel["fama_industry"]]
+    mean = clipped.groupby(industry).transform("mean")
+    sd = clipped.groupby(industry).transform("std")
+    sic = panel["sic_code"]
+    org_cap = ((clipped - mean) / sd).where(sic.notna() & ~sic.between(6000, 6999))
+
+    assets, revenue = panel["assets"], panel["revenue"]
+    ebit = panel["netinc"] + panel["taxexp"] + panel["intexp"]
+
+    def ratio_change(top: pd.Series, bottom: pd.Series) -> pd.Series:
+        return top / bottom - ago(top, 12) / ago(bottom, 12)
+
+    tests = [
+        _stata_value(panel["netinc"]) > 0,
+        _stata_value(panel["ncfo"]) > 0,
+        _stata_value(ratio_change(panel["netinc"], assets)) > 0,
+        _stata_value(panel["ncfo"] - panel["netinc"]) > 0,
+        _stata_value(ratio_change(panel["debtnc"], assets)) < 0,
+        _stata_value(ratio_change(panel["assetsc"], panel["liabilitiesc"])) > 0,
+        _stata_value(ratio_change(ebit, revenue)) > 0,
+        _stata_value(ratio_change(revenue, assets)) > 0,
+        _stata_value(ago("sharesbas", 12) - panel["sharesbas"]) >= 0,  # no new shares
+    ]
+    score = sum(t.astype(float) for t in tests)
+    inputs = ["ncfo", "netinc", "assets", "debtnc", "revenue", "assetsc", "sharesbas"]
+    complete = panel[inputs].notna().all(axis=1) & ebit.notna()
+    mcap = panel["market_cap"].where(panel["market_cap"] > 0)
+    book = _usd(panel, "equity").where(panel["equity"] > 0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        log_bm = np.log(book / mcap)
+    ps = score.where(complete & (_quantile_bin(log_bm, months, 5) == 5))
+
+    rnd = panel["rnd"].where(panel["rnd"] >= 0)
+    sales = revenue.where(revenue > 0)
+    growth = _calendar_grid(keys.assign(v=np.log(sales / ago(sales, 12))), "v")
+    intensity = _calendar_grid(keys.assign(v=np.log1p(rnd / sales)), "v")
+    present = _calendar_grid(keys.assign(v=1.0), "v").notna()
+    slopes = []
+    for n in RDABILITY_LAGS:
+        sums = {k: 0 for k in ["n", "x", "y", "xx", "xy", "spent", "years"]}
+        for k in range(RDABILITY_YEARS):
+            y, x = growth.shift(12 * k), intensity.shift(12 * (k + n))
+            pair = y.notna() & x.notna()
+            sums["n"] = sums["n"] + pair
+            sums["x"] = sums["x"] + x.where(pair, 0)
+            sums["y"] = sums["y"] + y.where(pair, 0)
+            sums["xx"] = sums["xx"] + (x * x).where(pair, 0)
+            sums["xy"] = sums["xy"] + (x * y).where(pair, 0)
+            sums["spent"] = sums["spent"] + (x > 0)
+            sums["years"] = sums["years"] + present.shift(12 * k, fill_value=False)
+        count = sums["n"]
+        var = count * sums["xx"] - sums["x"] ** 2
+        slope = (count * sums["xy"] - sums["x"] * sums["y"]) / var.where(var > 0)
+        years = sums["years"]
+        share = sums["spent"] / years.where(years >= RDABILITY_MIN)
+        keep = (count >= RDABILITY_MIN) & ~(share < RDABILITY_MIN_SHARE)
+        slopes.append(slope.where(keep))
+    ability = pd.concat(slopes).groupby(level=0).mean().reindex(growth.index)
+    ability = pd.Series(_at_rows(ability, keys, growth), index=panel.index)
+    rd_share = (rnd / sales).where(rnd > 0)
+    top = _quantile_bin(rd_share, months, 3) == 3
+    return _with(panel, org_cap=org_cap, ps=ps, rd_ability=ability.where(top))
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 
