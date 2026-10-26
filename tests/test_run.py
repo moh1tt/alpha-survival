@@ -9,16 +9,21 @@ from alpha_survival.run import (
     COST_BPS,
     LEARNED,
     PUBLISHED_SIGN,
+    PUBLISHED_YEAR,
     RAW_FEATURES,
     UNREPORTED_TRIALS,
     baseline_models,
     coefficient_table,
     earlier_signal_candidates,
     evaluate,
+    gate_unpublished,
+    hindsight_table,
+    learned_run,
     monthly_sharpes,
     penalty_table,
     portfolio_table,
     prepare,
+    render_hindsight,
     render_penalties,
     render_portfolios,
     render_report,
@@ -305,7 +310,7 @@ def test_selection_table_deflates_every_portfolio_by_the_honest_trial_count():
     run_all(panel, keep=forecasts, min_train=12)
     portfolio_table(forecasts, panel, keep_net=net)
     assert len(net) == 16  # 4 models x 2 weightings x 2 leg rules
-    assert UNREPORTED_TRIALS == 92  # earlier portfolios stay trials
+    assert UNREPORTED_TRIALS == 112  # earlier portfolios stay trials
     table = selection_table(net)
     honest = f"dsr_n{16 + UNREPORTED_TRIALS}"
     assert list(table.columns) == [
@@ -403,3 +408,43 @@ def test_run_all_adds_the_combination_scored_as_a_rank():
     assert np.isnan(combo["oos_r2_pct"]) and np.isfinite(combo["mean_ic"])
     assert len(forecasts["combo"]) == len(forecasts["lgbm"])
     assert forecasts["combo"]["pred"].between(-1, 1).all()
+
+
+def test_publication_years_come_from_the_catalogue_references():
+    assert set(PUBLISHED_YEAR) == set(RAW_FEATURES)
+    # Jegadeesh & Titman 1993, Banz 1981, Novy-Marx 2013, Han, Zhou & Zhu 2016.
+    known = {"mom_12_1": 1993, "log_mcap": 1981, "gp_a": 2013, "trend_factor": 2016}
+    assert {f: PUBLISHED_YEAR[f] for f in known} == known
+    assert PUBLISHED_YEAR["vol_3m"] == 2006  # Ang, Hodrick, Xing & Zhang
+
+
+def test_gate_unpublished_hides_ranks_until_the_january_after_publication():
+    # Leakage test: before its paper's year ends a signal is missing (0) for every
+    # stock, so the models cannot use what nobody knew yet; afterwards untouched.
+    panel = prepare(make_panel())
+    before = panel.copy()
+    years = dict.fromkeys(RAW_FEATURES, 1990) | {"mom_12_1": 2001}
+    gate_unpublished(panel, years)
+    hidden = panel["month_end"] <= "2001-12-31"
+    assert (panel.loc[hidden, "mom_12_1_rank"] == 0).all()
+    assert before.loc[hidden, "mom_12_1_rank"].ne(0).any()  # it did hide something
+    pd.testing.assert_series_equal(
+        panel.loc[~hidden, "mom_12_1_rank"], before.loc[~hidden, "mom_12_1_rank"]
+    )
+    others = [f"{c}_rank" for c in RAW_FEATURES if c != "mom_12_1"]
+    pd.testing.assert_frame_equal(panel[others], before[others])  # published long ago
+    pd.testing.assert_series_equal(panel["mom_12_1"], before["mom_12_1"])  # raw kept
+
+
+def test_hindsight_table_compares_ungated_and_gated_learned_portfolios():
+    panel = prepare(make_panel())
+    ic_all, oos_all = learned_run(panel, min_train=12)
+    portfolios_all = portfolio_table(oos_all, panel)
+    gate_unpublished(panel, dict.fromkeys(RAW_FEATURES, 1990) | {"bm": 2001, "rev_1m": 2001})
+    ic_gated, oos_gated = learned_run(panel, min_train=12)
+    table = hindsight_table(ic_all, portfolios_all, ic_gated, portfolio_table(oos_gated, panel))
+    assert len(table) == 16 and set(table["portfolio"]) == set(LEARNED)
+    assert table[["mean_ic_all", "mean_ic_published"]].notna().all().all()
+    assert (table["mean_ic_all"] != table["mean_ic_published"]).any()  # gating changed them
+    text = render_hindsight(table)
+    assert "Hindsight" in text and "McLean & Pontiff" in text and "| ols |" in text

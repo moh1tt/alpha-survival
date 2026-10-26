@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression, Ridge
 
-from alpha_survival.catalogue import FEATURE_ACRONYMS, published_signs
+from alpha_survival.catalogue import FEATURE_ACRONYMS, publication_years, published_signs
 from alpha_survival.combine import rank_average
 from alpha_survival.data.external import monthly_factors
 from alpha_survival.data.quality import markdown_table
@@ -98,6 +98,9 @@ REPORT_PATH = Path("reports/baselines.md")
 # off the test period would be data snooping. `vol_3m` (total volatility over 3
 # months) is not an OSAP signal: Ang, Hodrick, Xing & Zhang 2006.
 PUBLISHED_SIGN = {**published_signs(), "vol_3m": -1}
+# Year each signal's paper came out. The models only see a signal from the January
+# after: before that, an investor could not have known it (McLean & Pontiff 2016).
+PUBLISHED_YEAR = {**publication_years(), "vol_3m": 2006}
 # The original 7 features first (Steps 10-26), then the OSAP families (Steps 47-62).
 ORIGINAL_FEATURES = ["mom_12_1", "log_mcap", "bm", "rev_1m", "gp_a", "asset_growth", "vol_3m"]
 RAW_FEATURES = ORIGINAL_FEATURES + [f for f in FEATURE_ACRONYMS if f not in ORIGINAL_FEATURES]
@@ -121,8 +124,10 @@ EARLIER_TRIALS = {
     "ols, enet, lgbm and combo portfolios on the original 7 features (Steps 27-45)": 16,
     "ols, enet, lgbm and combo portfolios on 28 features (Step 51)": 16,
     "ols, enet, lgbm and combo portfolios on 99 features (Step 63)": 16,
-    "ridge and rolling-window OLS, equal- or value-weighted, on 7, 28 and 99 features and "
-    "on this run's (tried, never built)": 16,
+    "ols, enet, lgbm and combo portfolios on 154 features before publication gating "
+    "(Step 83; rebuilt in the hindsight table)": 16,
+    "ridge and rolling-window OLS, equal- or value-weighted, on 7, 28, 99 and ungated 154 "
+    "features and on this run's (tried, never built)": 20,
 }
 UNREPORTED_TRIALS = sum(EARLIER_TRIALS.values())
 # Trial counts to show the deflated Sharpe ratio at, besides the honest count.
@@ -179,6 +184,51 @@ def prepare(panel: pd.DataFrame, factors: pd.DataFrame | None = None) -> pd.Data
     panel = add_trend_factor(add_approximate_accounting(panel, factors))
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
+
+
+def gate_unpublished(panel: pd.DataFrame, years: dict[str, int] | None = None) -> None:
+    """Set each ranked feature to 0 (the missing value) up to the December of its
+    paper's year (`PUBLISHED_YEAR`), so the models only use a signal once it was
+    public. Raw columns stay as they are: the appendix scores every signal over
+    the whole test. In place: a copy of the real panel would not fit in memory.
+    """
+    years = PUBLISHED_YEAR if years is None else years
+    year = panel["month_end"].dt.year.to_numpy()
+    for raw in RAW_FEATURES:
+        unknown = year <= years[raw]
+        if unknown.any():
+            panel.loc[unknown, f"{raw}_rank"] = 0.0
+
+
+def learned_run(
+    panel: pd.DataFrame, **split_kwargs
+) -> tuple[dict[str, float], dict[str, pd.DataFrame]]:
+    """Mean IC and out-of-sample forecasts of the learned models and their combination
+    (expanding window only): what `hindsight_table` needs from the ungated panel."""
+    keep: dict[str, pd.DataFrame] = {}
+    models = [m for m in baseline_models() if m.name in COMBO_MEMBERS]
+    table = evaluate(panel, models, keep=keep, **split_kwargs)
+    keep[COMBO] = rank_average(keep, COMBO_MEMBERS)
+    ic = dict(zip(table["model"], table["mean_ic"], strict=True))
+    ic[COMBO] = score(keep[COMBO], COMBO, None, is_return=False)["mean_ic"]
+    return ic, keep
+
+
+def hindsight_table(
+    ic_all: dict[str, float],
+    portfolios_all: pd.DataFrame,
+    ic_gated: dict[str, float],
+    portfolios_gated: pd.DataFrame,
+) -> pd.DataFrame:
+    """Each learned portfolio with every signal from the start (`all`) and with each
+    signal only after its publication (`published`): IC and net Sharpe side by side."""
+    keys = ["portfolio", "weighting", "legs"]
+    both = portfolios_all[[*keys, "sharpe_net_est"]].merge(
+        portfolios_gated[[*keys, "sharpe_net_est"]], on=keys, suffixes=("_all", "_published")
+    )
+    both.insert(3, "mean_ic_all", both["portfolio"].map(ic_all))
+    both.insert(4, "mean_ic_published", both["portfolio"].map(ic_gated))
+    return both
 
 
 def evaluate(
@@ -277,7 +327,8 @@ def render_report(table: pd.DataFrame, panel: pd.DataFrame) -> str:
             f"- Features: {len(RAW_FEATURES)} signals, each rank-normalised to [-1, 1] every "
             "month (missing = 0, the middle): the original 7 plus Open Source Asset Pricing "
             "replications (Chen & Zimmermann 2022). List and single-signal scores in the "
-            "appendix at the end.",
+            "appendix at the end. The models see each signal only from the January after "
+            "its paper was published (missing before; see the hindsight table).",
             "- Models: `zero` and `hist_mean` (pooled training mean) baselines; `ols` and "
             "`ridge` (alpha=1, untuned) on all features; `enet` (ElasticNet, half Lasso half "
             "Ridge penalty, its strength picked from 1e-5 to 0.1 by MSE on the latest 20% of "
@@ -688,6 +739,31 @@ def render_selection(
     )
 
 
+def render_hindsight(table: pd.DataFrame) -> str:
+    digits = {"mean_ic_all": 4, "mean_ic_published": 4}
+    digits |= {"sharpe_net_est_all": 2, "sharpe_net_est_published": 2}
+    unknown = sum(year >= 2002 for year in PUBLISHED_YEAR.values())
+    return "\n".join(
+        [
+            "## Hindsight: signals before they were published",
+            "",
+            "**Real data, out-of-sample, net of estimated costs. How much of the result "
+            "comes from using signals nobody knew about yet.**",
+            "",
+            f"- {unknown} of the {len(RAW_FEATURES)} signals were published in or after "
+            "2002, so for part of the test their papers did not exist. Every table above "
+            "uses `published`: a signal counts as missing (0 after ranking) until the "
+            "December of its paper's year, in training and in testing (McLean & Pontiff "
+            "2016). `all` uses every signal from the start, as Step 83 did.",
+            "- Same models, splits and costs; the `all` portfolios count as trials in the "
+            "deflated Sharpe ratio above.",
+            "",
+            markdown_table(_fmt(table, digits)),
+            "",
+        ]
+    )
+
+
 def spread_table(panel: pd.DataFrame) -> pd.DataFrame:
     """Average estimated half-spread (bps) by size decile, for a few eras."""
     est = estimated_spread_bps(panel)
@@ -736,6 +812,10 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     panel = prepare(load_panel())
+    ic_all, forecasts_all = learned_run(panel)
+    portfolios_all = portfolio_table(forecasts_all, panel)
+    del forecasts_all
+    gate_unpublished(panel)
     forecasts: dict[str, pd.DataFrame] = {}
     fitted: dict[str, list[Forecaster]] = {}
     table = run_all(panel, keep=forecasts, fitted=fitted)
@@ -751,6 +831,10 @@ def main(argv: list[str] | None = None) -> None:
     portfolio_table(forecasts, panel, keep_net=hidden, candidates=earlier_signal_candidates())
     selection = selection_table(net, hidden)
     print(selection.to_string(index=False))
+    expanding = table[table["window"] == "expanding"]
+    ic_gated = dict(zip(expanding["model"], expanding["mean_ic"], strict=True))
+    hindsight = hindsight_table(ic_all, portfolios_all, ic_gated, portfolios)
+    print(hindsight.to_string(index=False))
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     report = "\n".join(
@@ -759,6 +843,7 @@ def main(argv: list[str] | None = None) -> None:
             render_penalties(penalties, coefs),
             render_portfolios(portfolios),
             render_selection(selection, net, hidden),
+            render_hindsight(hindsight),
             render_spreads(spread_table(panel)),
             render_signals(signals),
         ]

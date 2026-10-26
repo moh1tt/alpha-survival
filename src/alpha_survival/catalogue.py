@@ -227,6 +227,14 @@ def published_signs(path: Path = CATALOGUE_PATH) -> dict[str, int]:
     return {feature: int(signs[acronym]) for feature, acronym in FEATURE_ACRONYMS.items()}
 
 
+def publication_years(path: Path = CATALOGUE_PATH) -> dict[str, int]:
+    """feature -> the year its original paper was published: the `(YYYY)` in the
+    catalogue's reference (the journal year, as McLean & Pontiff 2016 use)."""
+    references = load_catalogue(path).set_index("acronym")["reference"]
+    years = references.str.extract(r"\((\d{4})\)", expand=False).astype(int)
+    return {feature: int(years[acronym]) for feature, acronym in FEATURE_ACRONYMS.items()}
+
+
 def load_catalogue(path: Path = CATALOGUE_PATH) -> pd.DataFrame:
     """The catalogue as a DataFrame; `batch` is a nullable integer (NA if not usable)."""
     table = pd.read_csv(path, dtype=str, keep_default_na=False)
