@@ -199,6 +199,13 @@ FEATURE_ACRONYMS = {
     "intan_cfp": "IntanCFP",
     "intan_ep": "IntanEP",
     "comp_equ_iss": "CompEquIss",
+    # Step 79: duration, accruals x value, growth ranks, R&D capital
+    "equity_duration": "EquityDuration",
+    "accruals_bm": "AccrualsBM",
+    "inv_growth": "InvGrowth",
+    "mean_rank_rev_growth": "MeanRankRevGrowth",
+    "rd_cap": "RDcap",
+    "var_cf": "VarCF",
 }
 
 

@@ -43,7 +43,7 @@ def toy_factors(monkeypatch):
         rng.normal(0, 0.04, (N_MONTHS, 4)),
         index=MONTHS,
         columns=["mktrf", "smb", "hml", "ps_innov"],
-    ).assign(rf=0.002)
+    ).assign(rf=0.002, gnpdef=np.linspace(100, 110, N_MONTHS))
     monkeypatch.setattr(run, "monthly_factors", lambda: factors)
 
 
@@ -177,6 +177,7 @@ def test_evaluate_scores_each_model_the_right_way():
     long_lags += ["beta_tail_risk"]  # 72 months
     long_lags += ["firm_age_mom"]  # every fixture stock has the same age: no youngest fifth
     long_lags += ["intan_bm", "intan_sp", "intan_cfp", "intan_ep", "comp_equ_iss"]  # 60
+    long_lags += ["mean_rank_rev_growth", "rd_cap"]  # 60 and 48 months back
     empty = table.loc[signals, "n_forecasts"] == 0
     assert set(empty[empty].index) <= {f"signal_{c}" for c in long_lags}
     assert table.loc[empty[empty].index, "mean_ic"].isna().all()
@@ -230,7 +231,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 139
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 145
 
 
 def test_prepare_ranks_among_investable_stocks_only():

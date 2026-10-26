@@ -127,3 +127,19 @@ def test_download_all_writes_every_table(tmp_path):
     vix = external.load("vix", tmp_path)
     assert pd.api.types.is_datetime64_any_dtype(vix["available"])
     assert len(vix) == 2
+
+
+def test_monthly_factors_carry_the_deflator_known_at_each_month_end(tmp_path):
+    files = {
+        external.FRENCH_URL.format(name="F-F_Research_Data_Factors_daily"): french_zip(
+            FRENCH_DAILY
+        ),
+        external.FRENCH_URL.format(name="F-F_Research_Data_Factors"): french_zip(FRENCH_MONTHLY),
+        external.FRED_URL.format(series="VIXCLS"): VIX_CSV,
+        external.FRED_URL.format(series="GNPDEF"): GNPDEF_CSV,
+        external.PASTOR_URL: PASTOR_TXT,
+    }
+    external.download_all(tmp_path, fetch=files.__getitem__)
+    factors = external.monthly_factors(tmp_path)
+    # Q1 2026 is known from 30 June; Q2 only from 30 September: June and July get Q1.
+    assert factors["gnpdef"].tolist() == [131.345, 131.345]

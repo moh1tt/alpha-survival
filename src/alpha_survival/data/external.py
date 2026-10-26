@@ -159,7 +159,9 @@ def load(name: str, raw_dir: Path = EXTERNAL_DIR) -> pd.DataFrame:
 def monthly_factors(raw_dir: Path = EXTERNAL_DIR) -> pd.DataFrame:
     """Monthly rf, mktrf, smb, hml and ps_innov, indexed by the month end each is
     known at. A monthly value is about the month it is available at the end of, so
-    a factor return and a stock return of the same month line up."""
+    a factor return and a stock return of the same month line up. Also `gnpdef`: the
+    latest GNP deflator available at each month end (a quarter's value from the end
+    of the next quarter), for signals in real dollars."""
     ff = load("ff3_monthly", raw_dir)
     ps = load("ps_liquidity", raw_dir)
     for name, df in [("ff3_monthly", ff), ("ps_liquidity", ps)]:
@@ -167,7 +169,16 @@ def monthly_factors(raw_dir: Path = EXTERNAL_DIR) -> pd.DataFrame:
             raise ValueError(f"{name}: monthly values must be available at their own month end")
     ff = ff.set_index("available")[["rf", "mktrf", "smb", "hml"]]
     ps = ps.set_index("available")["innov_liq"].rename("ps_innov")
-    return ff.join(ps, how="left").rename_axis("month_end")
+    out = ff.join(ps, how="left").rename_axis("month_end")
+    deflator = load("gnpdef", raw_dir).sort_values("available")
+    months = pd.DataFrame({"month_end": out.index}).astype({"month_end": "datetime64[ns]"})
+    known = pd.merge_asof(
+        months,
+        deflator[["available", "value"]].astype({"available": "datetime64[ns]"}),
+        left_on="month_end",
+        right_on="available",
+    )
+    return out.assign(gnpdef=known["value"].to_numpy())
 
 
 def daily_factors(raw_dir: Path = EXTERNAL_DIR) -> pd.DataFrame:

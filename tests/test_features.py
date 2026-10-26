@@ -2139,3 +2139,127 @@ def test_intangible_returns_ignore_later_months():
     b = features.add_intangible_returns(wild).loc[lambda d: d["month_end"] == t, cols]
     assert a["comp_equ_iss"].notna().all()
     pd.testing.assert_frame_equal(a, b)
+
+
+def accounting_panel(n_firms=10, n_months=61, seed=0):
+    rng = np.random.default_rng(seed)
+    months = pd.date_range("2000-01-31", periods=n_months, freq="ME")
+    panel = pd.DataFrame([(s, m) for s in range(1, n_firms + 1) for m in months])
+    panel.columns = ["permaticker", "month_end"]
+    for col in ["equity", "revenue", "assets", "inventory", "ppnenet", "assetsc"]:
+        panel[col] = rng.uniform(50, 150, len(panel))
+    for col in ["netinc", "depamor", "rnd", "cashneq", "liabilitiesc", "debtc"]:
+        panel[col] = rng.uniform(1, 20, len(panel))
+    panel["market_cap"] = rng.uniform(100, 1000, len(panel))
+    panel["fxusd"] = 1.0
+    panel["sic_code"] = 3571.0
+    factors = pd.DataFrame({"gnpdef": np.linspace(100, 120, n_months)}, index=months)
+    return panel, factors, months
+
+
+def row(out, stock, month):
+    return out[(out["permaticker"] == stock) & (out["month_end"] == month)].iloc[0]
+
+
+def test_equity_duration_by_hand():
+    panel, factors, months = accounting_panel(n_months=13)
+    out = features.add_more_accounting_signals(panel, factors)
+    now, then = row(panel, 1, months[12]), row(panel, 1, months[0])
+    roe, g = now["netinc"] / then["equity"], now["revenue"] / then["revenue"] - 1
+    bv, md, pv = now["equity"], 0.0, 0.0
+    for t in range(1, 11):
+        roe, g = 0.57 * roe + 0.12 * 0.43, 0.24 * g + 0.06 * 0.76
+        cd = bv * (roe - g)
+        bv = bv * (1 + g)
+        md, pv = md + t * cd / 1.12**t, pv + cd / 1.12**t
+    me = now["market_cap"]
+    expected = md / me + (10 + 1.12 / 0.12) * (1 - pv / me)
+    assert row(out, 1, months[12])["equity_duration"] == pytest.approx(expected)
+    assert np.isnan(row(out, 1, months[11])["equity_duration"])  # no equity a year back
+
+
+def test_accruals_bm_takes_value_with_low_accruals_and_the_opposite():
+    panel, factors, months = accounting_panel(n_months=13)
+    t = months[12]
+    now = panel["month_end"] == t
+    panel.loc[now, "market_cap"] = panel.loc[now, "equity"] * np.linspace(0.5, 5, 10)
+    out = features.add_more_accounting_signals(panel, factors)
+    got = out[out["month_end"] == t].set_index("permaticker")
+    bm = np.log(got["equity"] / got["market_cap"])
+    first = panel[panel["month_end"] == months[0]].set_index("permaticker")
+    acc = (
+        (got["assetsc"] - first["assetsc"])
+        - (got["cashneq"] - first["cashneq"])
+        - ((got["liabilitiesc"] - first["liabilitiesc"]) - (got["debtc"] - first["debtc"]))
+    ) / ((got["assets"] + first["assets"]) / 2)
+    q_bm, q_acc = pd.qcut(bm, 5, labels=False) + 1, pd.qcut(acc, 5, labels=False) + 1
+    expected = pd.Series(np.nan, index=got.index)
+    expected[(q_bm == 5) & (q_acc == 1)] = 1.0
+    expected[(q_bm == 1) & (q_acc == 5)] = 0.0
+    pd.testing.assert_series_equal(got["accruals_bm"], expected, check_names=False)
+
+
+def test_inv_growth_is_real_inventory_growth_with_exclusions():
+    panel, factors, months = accounting_panel(n_months=13)
+    panel.loc[panel["permaticker"] == 2, "sic_code"] = 6022.0  # a bank: excluded
+    out = features.add_more_accounting_signals(panel, factors)
+    now, then = row(panel, 1, months[12]), row(panel, 1, months[0])
+    expected = (now["inventory"] / 120) / (then["inventory"] / 100) - 1
+    assert row(out, 1, months[12])["inv_growth"] == pytest.approx(expected)
+    assert np.isnan(row(out, 2, months[12])["inv_growth"])
+
+
+def test_mean_rank_rev_growth_weights_past_ranks():
+    panel, factors, months = accounting_panel(n_months=73)
+    out = features.add_more_accounting_signals(panel, factors)
+    wide = panel.pivot(index="month_end", columns="permaticker", values="revenue")
+    ranks = np.log(wide / wide.shift(12)).rank(axis=1, ascending=False)  # 1 = fastest
+    lags = {12: 5, 24: 4, 36: 3, 48: 2, 60: 1}
+    expected = sum(w * ranks.iloc[72 - lag] for lag, w in lags.items()) / 15
+    got = out[out["month_end"] == months[72]].set_index("permaticker")["mean_rank_rev_growth"]
+    assert got.to_numpy() == pytest.approx(expected.to_numpy())
+    # At month 71 the rank 60 months back needs revenue at month -1: none.
+    assert out.loc[out["month_end"] == months[71], "mean_rank_rev_growth"].isna().all()
+
+
+def test_rd_cap_capitalises_five_years_for_small_firms():
+    panel, factors, months = accounting_panel()
+    out = features.add_more_accounting_signals(panel, factors)
+    t = months[60]
+    caps = panel[panel["month_end"] == t].set_index("permaticker")["market_cap"]
+    small = pd.qcut(caps, 3, labels=False) == 0
+    stock = small[small].index[0]
+    r = panel[panel["permaticker"] == stock].set_index("month_end")["rnd"]
+    capital = r.iloc[60] + 0.8 * r.iloc[48] + 0.6 * r.iloc[36] + 0.4 * r.iloc[24] + 0.2 * r.iloc[12]
+    assets = row(panel, stock, t)["assets"]
+    got = out[out["month_end"] == t].set_index("permaticker")["rd_cap"]
+    assert got.loc[stock] == pytest.approx(capital / assets)
+    assert got[~small].isna().all()
+
+
+def test_var_cf_is_the_variance_of_cash_flow_to_price():
+    panel, factors, months = accounting_panel()
+    out = features.add_more_accounting_signals(panel, factors)
+    one = panel[panel["permaticker"] == 1].set_index("month_end")
+    cf = (one["netinc"] + one["depamor"]) / one["market_cap"]
+    assert row(out, 1, months[60])["var_cf"] == pytest.approx(cf.iloc[1:61].var())
+    assert np.isnan(row(out, 1, months[22])["var_cf"])  # 23 months: under 24
+    assert row(out, 1, months[23])["var_cf"] == pytest.approx(cf.iloc[:24].var())
+
+
+def test_more_accounting_signals_ignore_later_months():
+    # Leakage test: later filings, caps and deflators cannot move month t.
+    panel, factors, months = accounting_panel(n_months=64)
+    t = months[60]
+    wild, wild_factors = panel.copy(), factors.copy()
+    later = wild["month_end"] > t
+    cols = ["equity", "revenue", "assets", "inventory", "netinc", "rnd", "market_cap"]
+    wild.loc[later, cols] = 1e6
+    wild_factors.loc[wild_factors.index > t, "gnpdef"] = 1.0
+    names = ["equity_duration", "accruals_bm", "inv_growth", "mean_rank_rev_growth"]
+    names += ["rd_cap", "var_cf"]
+    a = features.add_more_accounting_signals(panel, factors)
+    b = features.add_more_accounting_signals(wild, wild_factors)
+    a, b = (d.loc[d["month_end"] == t, names] for d in (a, b))
+    assert a[["equity_duration", "inv_growth", "var_cf"]].notna().all().all()
+    pd.testing.assert_frame_equal(a, b)

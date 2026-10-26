@@ -1953,6 +1953,124 @@ def add_intangible_returns(panel: pd.DataFrame) -> pd.DataFrame:
     return _with(panel, **added)
 
 
+# EquityDuration (Dechow, Sloan & Soliman 2004): ROE and sales growth fade over a
+# 10-year horizon at these rates, discounted at the cost of equity.
+DURATION_ROE_PERSISTENCE, DURATION_GROWTH_PERSISTENCE = 0.57, 0.24
+DURATION_COST_OF_EQUITY, DURATION_LONG_RUN_GROWTH = 0.12, 0.06
+DURATION_YEARS = 10
+RANK_GROWTH_WEIGHTS = {12: 5, 24: 4, 36: 3, 48: 2, 60: 1}  # MeanRankRevGrowth: lag -> weight
+RDCAP_WEIGHTS = {0: 1.0, 12: 0.8, 24: 0.6, 36: 0.4, 48: 0.2}  # RDcap: 20% a year depreciation
+VARCF_MONTHS, VARCF_MIN = 60, 24  # VarCF: variance over >= 24 of the last 60 months
+INVGROWTH_EXCLUDED = ((4000, 4999), (6000, 6999))  # InvGrowth: utilities etc. and financials
+
+
+def _quantile_bin(values: pd.Series, months: pd.Series, n: int) -> pd.Series:
+    """Each month's n-tile of `values`, 1 (lowest) .. n, NaN where missing."""
+    return values.groupby(months).transform(
+        lambda v: pd.qcut(v, n, labels=False, duplicates="drop") + 1
+    )
+
+
+def add_more_accounting_signals(panel: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame:
+    """Add `equity_duration`, `accruals_bm`, `inv_growth`, `mean_rank_rev_growth`,
+    `rd_cap`, `var_cf` (OSAP's code) on the latest public filings; "12 months ago"
+    is the stock's own row then. `factors`: monthly `gnpdef` (data.external).
+
+    - `equity_duration`: Dechow et al.'s implied equity duration. ROE (net income /
+      book equity a year ago) and sales growth fade toward 12% and 6% at rates 0.57
+      and 0.24 for 10 years; the book-value cash distributions, weighted by year and
+      discounted at 12%, over market cap, plus a terminal term (EquityDuration;
+      Dechow, Sloan & Soliman 2004). Book equity in USD; OSAP uses the fiscal
+      year-end market cap, ours is the month end's.
+    - `accruals_bm`: 1 for the top fifth of book-to-market and bottom fifth of
+      accruals, 0 for the opposite, else NaN; NaN for negative book equity
+      (AccrualsBM; Bartov & Kim 2004). Accruals as Sloan's without D&A (OSAP's), the
+      taxes-payable term left out as in `accruals`.
+    - `inv_growth`: growth of inventory in real dollars (GNP deflator) over 12
+      months; SIC 4000-4999 and 6000-6999 (today's code) excluded, and firms with
+      no assets or non-positive net PP&E (InvGrowth; Belo & Lin 2012).
+    - `mean_rank_rev_growth`: weighted mean (5, 4, 3, 2, 1) of the stock's rank on
+      log revenue growth 1 .. 5 years ago, 1 = fastest that month (MeanRankRevGrowth;
+      Lakonishok, Shleifer & Vishny 1994). Ranks count the month's firms with growth.
+    - `rd_cap`: R&D capitalised over 5 years with 20% a year depreciation, over
+      assets, for the smallest third of firms by market cap only (RDcap; Li 2011).
+      Missing R&D counts as 0.
+    - `var_cf`: variance of (net income + D&A) / market cap over the last 60 months
+      (>= 24), in USD (VarCF; Haugen & Baker 1996).
+    Known at month_end.
+    """
+    panel = _sorted_by_stock(panel)
+    months = panel["month_end"]
+
+    def ago(values: str | pd.Series, lag: int) -> pd.Series:
+        return _months_ago(panel, values, lag)
+
+    mcap = panel["market_cap"].where(panel["market_cap"] > 0)
+    book = _usd(panel, "equity")
+    roe = panel["netinc"] / ago("equity", 12).where(lambda s: s != 0)
+    growth = (panel["revenue"] / ago("revenue", 12) - 1).replace([np.inf, -np.inf], np.nan)
+    growth = growth.fillna(0)
+    a, c = DURATION_ROE_PERSISTENCE, DURATION_COST_OF_EQUITY
+    b, g_long = DURATION_GROWTH_PERSISTENCE, DURATION_LONG_RUN_GROWTH
+    weighted = present = 0.0
+    value = book
+    for year in range(1, DURATION_YEARS + 1):
+        roe = a * roe + c * (1 - a)
+        growth = b * growth + g_long * (1 - b)
+        distribution = value * (roe - growth)  # BV_{t-1} - BV_t + BV_{t-1} x ROE_t
+        value = value * (1 + growth)
+        discount = (1 + c) ** year
+        weighted = weighted + year * distribution / discount
+        present = present + distribution / discount
+    terminal = DURATION_YEARS + (1 + c) / c
+    equity_duration = weighted / mcap + terminal * (1 - present / mcap)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        log_bm = np.log(book / mcap).replace([np.inf, -np.inf], np.nan)
+    change = {c: panel[c] - ago(c, 12) for c in ["assetsc", "cashneq", "liabilitiesc", "debtc"]}
+    avg_assets = (panel["assets"] + ago("assets", 12)) / 2
+    accruals = (
+        change["assetsc"] - change["cashneq"] - (change["liabilitiesc"] - change["debtc"])
+    ) / avg_assets.where(avg_assets != 0)
+    q_bm, q_acc = _quantile_bin(log_bm, months, 5), _quantile_bin(accruals, months, 5)
+    accruals_bm = pd.Series(np.nan, index=panel.index)
+    accruals_bm[(q_bm == 5) & (q_acc == 1)] = 1.0
+    accruals_bm[(q_bm == 1) & (q_acc == 5)] = 0.0
+    accruals_bm = accruals_bm.where(~(panel["equity"] < 0))
+
+    deflator = months.map(factors["gnpdef"])
+    real_inventory = panel["inventory"] / deflator
+    excluded = np.any([panel["sic_code"].between(*r) for r in INVGROWTH_EXCLUDED], axis=0)
+    ppe = panel["ppnenet"]
+    kept = ~excluded & (panel["assets"] > 0) & ((ppe > 0) | ppe.isna())
+    inv_growth = (real_inventory / ago(real_inventory, 12) - 1).where(kept)
+    inv_growth = inv_growth.replace([np.inf, -np.inf], np.nan)
+
+    revenue = panel["revenue"]
+    revenue_before = ago("revenue", 12)
+    log_growth = np.log(revenue.where(revenue > 0) / revenue_before.where(revenue_before > 0))
+    rank = log_growth.groupby(months).rank(ascending=False)
+    weights = sum(RANK_GROWTH_WEIGHTS.values())
+    mean_rank = sum(w * ago(rank, lag) for lag, w in RANK_GROWTH_WEIGHTS.items()) / weights
+
+    rnd = panel["rnd"].fillna(0)
+    capital = sum(w * (rnd if lag == 0 else ago(rnd, lag)) for lag, w in RDCAP_WEIGHTS.items())
+    small = _quantile_bin(mcap, months, 3) == 1
+    rd_cap = (capital / panel["assets"].where(panel["assets"] > 0)).where(small)
+
+    cash_flow = (_usd(panel, "netinc") + _usd(panel, "depamor")) / mcap
+    var_cf = _own_rolling(panel, cash_flow, VARCF_MONTHS, VARCF_MIN, "std") ** 2
+    return _with(
+        panel,
+        equity_duration=equity_duration,
+        accruals_bm=accruals_bm,
+        inv_growth=inv_growth,
+        mean_rank_rev_growth=mean_rank,
+        rd_cap=rd_cap,
+        var_cf=var_cf,
+    )
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 
