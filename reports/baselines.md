@@ -3,7 +3,7 @@
 **Real data (Sharadar US equities), out-of-sample, walk-forward. No transaction costs; not a trading result.**
 
 - Panel: investable rows (price >= $5 at month end), 1997-12 to 2026-09, 1,362,457 stock-months, 16,118 stocks.
-- Features: 99 signals, each rank-normalised to [-1, 1] every month (missing = 0, the middle): the original 7 plus Open Source Asset Pricing replications (Chen & Zimmermann 2022). List and single-signal scores in the appendix at the end.
+- Features: 154 signals, each rank-normalised to [-1, 1] every month (missing = 0, the middle): the original 7 plus Open Source Asset Pricing replications (Chen & Zimmermann 2022). List and single-signal scores in the appendix at the end.
 - Models: `zero` and `hist_mean` (pooled training mean) baselines; `ols` and `ridge` (alpha=1, untuned) on all features; `enet` (ElasticNet, half Lasso half Ridge penalty, its strength picked from 1e-5 to 0.1 by MSE on the latest 20% of each training window, then refit on the whole window); `lgbm` (LightGBM gradient-boosted trees, fixed untuned settings: depth 4, 200 trees, learning rate 0.05, each leaf >= 0.1% of training rows), which can pick up nonlinear effects and interactions.
 - `combo`: each month, the forecasts of `ols`, `enet` and `lgbm` ranked to [-1, 1] and averaged with equal weights (fixed in advance, nothing fit). A rank score, not a return, so no R^2.
 - Splits: first 60 months train only, 12-month test blocks, model refit at the start of each block, horizon 1, embargo 0. `window`: `expanding` trains on all months so far; `rolling 60m` on the latest 60 only. Both start testing in the same month.
@@ -15,106 +15,128 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | zero | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.000 |  |  |  |  |  | 0 |
 | hist_mean | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.193 |  |  |  |  |  | 0 |
-| ols | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.058 | 0.0445 | 9.51 | 9.35 | 0.03 | 0.737 | 285 |
-| ridge | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.058 | 0.0445 | 9.51 | 9.35 | 0.03 | 0.737 | 285 |
-| enet | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.208 | 0.0355 | 6.14 | 6.53 | 0.04 | 0.700 | 237 |
-| lgbm | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | -2.938 | 0.0280 | 5.51 | 5.97 | -0.03 | 0.632 | 285 |
-| combo | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 |  | 0.0453 | 8.84 | 8.65 | 0.07 | 0.758 | 285 |
+| ols | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.028 | 0.0503 | 11.25 | 10.82 | 0.07 | 0.789 | 285 |
+| ridge | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.028 | 0.0503 | 11.25 | 10.82 | 0.07 | 0.789 | 285 |
+| enet | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | 0.243 | 0.0333 | 5.46 | 5.79 | 0.01 | 0.651 | 249 |
+| lgbm | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 | -6.198 | 0.0313 | 4.70 | 4.93 | -0.02 | 0.649 | 285 |
+| combo | expanding | 2002-12-31 | 2026-09-30 | 1,057,303 |  | 0.0476 | 8.78 | 9.09 | 0.06 | 0.723 | 285 |
 | hist_mean | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.192 |  |  |  |  |  | 0 |
-| ols | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.394 | 0.0363 | 8.42 | 9.54 | 0.03 | 0.705 | 285 |
+| ols | rolling 60m | 2002-12-31 | 2026-09-30 | 1,057,303 | -0.452 | 0.0397 | 9.12 | 10.74 | 0.04 | 0.768 | 285 |
 
 ## ElasticNet: what it chose each year
 
 **Real data. Chosen in training only (latest 20% of each training window); the test year is never seen.**
 
-- One row per refit. `alpha`: penalty strength picked (1e-5 barely shrinks, 0.1 zeroes everything). `n_kept`: features (of 99) with a non-zero coefficient.
-- 4 of 24 refits kept no feature: in validation, nothing linear beat forecasting the average, so the model held no position that year.
+- One row per refit. `alpha`: penalty strength picked (1e-5 barely shrinks, 0.1 zeroes everything). `n_kept`: features (of 154) with a non-zero coefficient.
+- 3 of 24 refits kept no feature: in validation, nothing linear beat forecasting the average, so the model held no position that year.
 
 | test_from | test_to | alpha | n_kept |
 | --- | --- | --- | --- |
 | 2002-12-31 | 2003-11-30 | 3e-03 | 12 |
-| 2003-12-31 | 2004-11-30 | 1e-02 | 0 |
-| 2004-12-31 | 2005-11-30 | 3e-03 | 8 |
-| 2005-12-31 | 2006-11-30 | 3e-03 | 8 |
-| 2006-12-31 | 2007-11-30 | 3e-03 | 6 |
-| 2007-12-31 | 2008-11-30 | 3e-03 | 6 |
-| 2008-12-31 | 2009-11-30 | 1e-03 | 24 |
-| 2009-12-31 | 2010-11-30 | 3e-03 | 4 |
+| 2003-12-31 | 2004-11-30 | 3e-02 | 0 |
+| 2004-12-31 | 2005-11-30 | 1e-02 | 0 |
+| 2005-12-31 | 2006-11-30 | 3e-03 | 10 |
+| 2006-12-31 | 2007-11-30 | 3e-03 | 9 |
+| 2007-12-31 | 2008-11-30 | 3e-03 | 8 |
+| 2008-12-31 | 2009-11-30 | 1e-03 | 31 |
+| 2009-12-31 | 2010-11-30 | 3e-03 | 6 |
 | 2010-12-31 | 2011-11-30 | 1e-02 | 0 |
-| 2011-12-31 | 2012-11-30 | 1e-02 | 0 |
-| 2012-12-31 | 2013-11-30 | 3e-03 | 3 |
-| 2013-12-31 | 2014-11-30 | 3e-03 | 3 |
-| 2014-12-31 | 2015-11-30 | 1e-03 | 23 |
-| 2015-12-31 | 2016-11-30 | 3e-04 | 40 |
-| 2016-12-31 | 2017-11-30 | 3e-04 | 40 |
-| 2017-12-31 | 2018-11-30 | 3e-03 | 3 |
-| 2018-12-31 | 2019-11-30 | 3e-04 | 40 |
-| 2019-12-31 | 2020-11-30 | 3e-03 | 3 |
-| 2020-12-31 | 2021-11-30 | 1e-02 | 0 |
-| 2021-12-31 | 2022-11-30 | 3e-04 | 43 |
-| 2022-12-31 | 2023-11-30 | 3e-04 | 43 |
-| 2023-12-31 | 2024-11-30 | 1e-03 | 17 |
-| 2024-12-31 | 2025-11-30 | 3e-04 | 40 |
-| 2025-12-31 | 2026-09-30 | 3e-04 | 38 |
+| 2011-12-31 | 2012-11-30 | 3e-03 | 5 |
+| 2012-12-31 | 2013-11-30 | 3e-03 | 5 |
+| 2013-12-31 | 2014-11-30 | 3e-03 | 5 |
+| 2014-12-31 | 2015-11-30 | 3e-03 | 5 |
+| 2015-12-31 | 2016-11-30 | 3e-03 | 5 |
+| 2016-12-31 | 2017-11-30 | 3e-03 | 5 |
+| 2017-12-31 | 2018-11-30 | 3e-03 | 5 |
+| 2018-12-31 | 2019-11-30 | 3e-03 | 5 |
+| 2019-12-31 | 2020-11-30 | 3e-03 | 5 |
+| 2020-12-31 | 2021-11-30 | 3e-03 | 3 |
+| 2021-12-31 | 2022-11-30 | 1e-03 | 21 |
+| 2022-12-31 | 2023-11-30 | 3e-04 | 61 |
+| 2023-12-31 | 2024-11-30 | 3e-04 | 61 |
+| 2024-12-31 | 2025-11-30 | 3e-04 | 59 |
+| 2025-12-31 | 2026-09-30 | 3e-04 | 60 |
 
 Per feature, over all refits: `folds_kept` = refits with a non-zero coefficient; `mean_coef_bps` = average coefficient in bps per month from the median stock to the top one on that feature (dropped = 0), others held fixed.
 
 | feature | published_sign | folds_kept | mean_coef_bps |
 | --- | --- | --- | --- |
-| cfp | +1 | 20 | +23.8 |
-| roaq | +1 | 20 | +21.4 |
-| mom_offseason_12m | +1 | 20 | +18.2 |
-| mom_6m | +1 | 16 | +11.9 |
-| mom_offseason | -1 | 14 | -12.5 |
-| gp_a | +1 | 13 | +9.5 |
-| oper_prof_rd | +1 | 13 | +8.6 |
-| max_ret | -1 | 11 | -7.8 |
-| rd | +1 | 10 | +16.5 |
-| sp | +1 | 10 | +8.4 |
-| high_52 | +1 | 10 | +6.2 |
-| invest_ppe_inv | -1 | 10 | -4.0 |
-| illiquidity | +1 | 9 | +15.9 |
-| firm_age | -1 | 9 | +4.7 |
-| mom_season | +1 | 9 | +4.2 |
-| cash | +1 | 9 | +4.1 |
-| cf | +1 | 9 | +3.3 |
-| ch_nncoa | -1 | 9 | -3.0 |
-| noa | -1 | 9 | -1.9 |
-| num_earn_increase | +1 | 9 | +1.9 |
-| volume_trend | -1 | 9 | -1.7 |
-| rev_1m | -1 | 8 | -6.7 |
-| bid_ask_spread | +1 | 8 | -4.3 |
-| vol_sd | -1 | 7 | +15.1 |
-| std_turn | -1 | 7 | -6.5 |
-| mom_season_6y | +1 | 7 | +2.7 |
-| pct_acc | -1 | 7 | -2.3 |
-| ep | +1 | 7 | +2.0 |
-| mom_season_short | +1 | 7 | +1.8 |
-| ch_tax | +1 | 7 | +1.3 |
-| ch_inv | -1 | 7 | -1.2 |
-| mr_reversal | -1 | 7 | -0.5 |
-| mom_12_1 | +1 | 6 | +3.0 |
-| bm | +1 | 6 | +2.6 |
-| price | -1 | 6 | -1.0 |
-| ebm | +1 | 6 | +0.3 |
-| share_vol | -1 | 5 | +3.6 |
-| vol_3m | -1 | 5 | -1.7 |
-| mom_offseason_6y | -1 | 5 | -1.3 |
-| am | +1 | 4 | +3.7 |
-| ch_eq | -1 | 4 | -0.9 |
-| int_mom | +1 | 4 | -0.6 |
-| oper_prof | +1 | 4 | -0.5 |
-| bm_dec | +1 | 3 | +0.9 |
-| zerotrade_12m | +1 | 3 | +0.7 |
-| log_mcap | -1 | 3 | -0.7 |
-| xfin | -1 | 3 | -0.3 |
-| investment | -1 | 3 | -0.2 |
-| lr_reversal | -1 | 2 | +0.2 |
+| ind_ret_big | +1 | 21 | +45.3 |
+| trend_factor | +1 | 21 | +34.5 |
+| ind_mom | +1 | 21 | +27.0 |
+| cfp | +1 | 20 | +19.8 |
+| roaq | +1 | 20 | +15.7 |
+| mom_offseason | -1 | 10 | -6.9 |
+| mom_offseason_12m | +1 | 10 | +6.1 |
+| firm_age_mom | +1 | 8 | +11.2 |
+| oper_prof_rd | +1 | 8 | +5.9 |
+| gp_a | +1 | 7 | +6.2 |
+| max_ret | -1 | 7 | -4.6 |
+| rd | +1 | 6 | +8.2 |
+| rev_1m | -1 | 6 | -4.7 |
+| sp | +1 | 6 | +4.7 |
+| invest_ppe_inv | -1 | 6 | -2.2 |
+| high_52 | +1 | 6 | +1.4 |
+| illiquidity | +1 | 5 | +7.3 |
+| ind_ipo | -1 | 5 | -6.0 |
+| coskewness | -1 | 5 | -3.2 |
+| price_delay_slope | +1 | 5 | -2.2 |
+| cash | +1 | 5 | +2.2 |
+| mom_season | +1 | 5 | +2.1 |
+| revenue_surprise | +1 | 5 | +2.1 |
+| ch_nncoa | -1 | 5 | -1.7 |
+| equity_duration | -1 | 5 | -1.2 |
+| bm | +1 | 5 | +1.1 |
+| volume_trend | -1 | 5 | -0.8 |
+| noa | -1 | 5 | -0.6 |
+| num_earn_increase | +1 | 5 | +0.6 |
+| vol_sd | -1 | 4 | +8.8 |
+| am | +1 | 4 | +4.8 |
+| std_turn | -1 | 4 | -4.3 |
+| bid_ask_spread | +1 | 4 | -2.1 |
+| pct_acc | -1 | 4 | -1.6 |
+| mom_season_6y | +1 | 4 | +1.5 |
+| coskew_acx | -1 | 4 | -1.5 |
+| div_season | +1 | 4 | +1.4 |
+| ep | +1 | 4 | +1.1 |
+| rds | +1 | 4 | -1.1 |
+| log_mcap | -1 | 4 | -1.1 |
+| return_skew_3f | -1 | 4 | +1.0 |
+| earn_sup_big | +1 | 4 | +1.0 |
+| herf_be | -1 | 4 | -0.8 |
+| oper_prof | +1 | 4 | -0.8 |
+| ch_inv | -1 | 4 | -0.7 |
+| mr_reversal | -1 | 4 | -0.7 |
+| div_yield_st | +1 | 4 | +0.7 |
+| beta_vix | -1 | 4 | -0.7 |
+| ch_eq | -1 | 4 | -0.5 |
+| ch_tax | +1 | 4 | +0.4 |
+| ebm | +1 | 4 | +0.3 |
+| investment | -1 | 4 | -0.3 |
+| mean_rank_rev_growth | +1 | 4 | -0.2 |
+| mom_6m | +1 | 4 | -0.2 |
+| zerotrade_12m | +1 | 3 | +1.1 |
+| mom_12_1 | +1 | 3 | +1.1 |
+| beta | +1 | 3 | +0.8 |
+| cf | +1 | 3 | +0.7 |
+| vol_3m | -1 | 3 | -0.4 |
+| price_delay_rsq | +1 | 3 | -0.4 |
+| beta_fp | +1 | 3 | -0.3 |
+| price | -1 | 2 | -0.3 |
 | mom_vol | +1 | 2 | -0.1 |
-| cb_oper_prof | +1 | 1 | +0.1 |
-| net_debt_price | -1 | 1 | -0.0 |
-| leverage | +1 | 1 | +0.0 |
+| mom_offseason_6y | -1 | 2 | -0.1 |
+| herf | -1 | 2 | -0.1 |
+| xfin | -1 | 2 | -0.0 |
+| residual_momentum | +1 | 1 | -0.2 |
+| zerotrade_1m | +1 | 1 | +0.1 |
+| mom_season_short | +1 | 1 | +0.1 |
+| idio_vol_aht | -1 | 1 | -0.1 |
+| del_net_fin | +1 | 1 | +0.0 |
+| idio_vol_3f | -1 | 1 | -0.0 |
+| cb_oper_prof | +1 | 1 | +0.0 |
 | asset_growth | -1 | 0 | 0 |
+| int_mom | +1 | 0 | 0 |
+| lr_reversal | -1 | 0 | 0 |
 | mom_rev | +1 | 0 | 0 |
 | mom_season_11y | +1 | 0 | 0 |
 | mom_season_16y | +1 | 0 | 0 |
@@ -122,10 +144,14 @@ Per feature, over all refits: `folds_kept` = refits with a non-zero coefficient;
 | mom_offseason_16y | -1 | 0 | 0 |
 | return_skew | -1 | 0 | 0 |
 | dol_vol | -1 | 0 | 0 |
+| firm_age | -1 | 0 | 0 |
+| leverage | +1 | 0 | 0 |
 | cash_prod | -1 | 0 | 0 |
 | ent_mult | -1 | 0 | 0 |
+| bm_dec | +1 | 0 | 0 |
 | payout_yield | +1 | 0 | 0 |
 | net_payout_yield | +1 | 0 | 0 |
+| net_debt_price | -1 | 0 | 0 |
 | bpebm | -1 | 0 | 0 |
 | roe | +1 | 0 | 0 |
 | op_leverage | +1 | 0 | 0 |
@@ -142,7 +168,6 @@ Per feature, over all refits: `folds_kept` = refits with a non-zero coefficient;
 | del_equ | -1 | 0 | 0 |
 | del_lti | -1 | 0 | 0 |
 | del_finl | -1 | 0 | 0 |
-| del_net_fin | +1 | 0 | 0 |
 | ch_asset_turnover | +1 | 0 | 0 |
 | grcapx | -1 | 0 | 0 |
 | grcapx3y | -1 | 0 | 0 |
@@ -156,10 +181,40 @@ Per feature, over all refits: `folds_kept` = refits with a non-zero coefficient;
 | share_iss_1y | -1 | 0 | 0 |
 | share_iss_5y | -1 | 0 | 0 |
 | share_repurchase | +1 | 0 | 0 |
+| share_vol | -1 | 0 | 0 |
 | vol_mkt | -1 | 0 | 0 |
-| zerotrade_1m | +1 | 0 | 0 |
 | zerotrade_6m | +1 | 0 | 0 |
 | book_leverage | -1 | 0 | 0 |
+| beta_liquidity_ps | +1 | 0 | 0 |
+| realized_vol | -1 | 0 | 0 |
+| beta_tail_risk | +1 | 0 | 0 |
+| price_delay_tstat | +1 | 0 | 0 |
+| herf_asset | -1 | 0 | 0 |
+| ch_inv_ia | -1 | 0 | 0 |
+| abnormal_accruals | -1 | 0 | 0 |
+| earnings_surprise | +1 | 0 | 0 |
+| earnings_consistency | +1 | 0 | 0 |
+| div_init | +1 | 0 | 0 |
+| div_omit | -1 | 0 | 0 |
+| exch_switch | -1 | 0 | 0 |
+| spinoff | +1 | 0 | 0 |
+| rd_ipo | -1 | 0 | 0 |
+| intan_bm | -1 | 0 | 0 |
+| intan_sp | -1 | 0 | 0 |
+| intan_cfp | -1 | 0 | 0 |
+| intan_ep | -1 | 0 | 0 |
+| comp_equ_iss | -1 | 0 | 0 |
+| accruals_bm | +1 | 0 | 0 |
+| inv_growth | -1 | 0 | 0 |
+| rd_cap | +1 | 0 | 0 |
+| var_cf | -1 | 0 | 0 |
+| org_cap | +1 | 0 | 0 |
+| ps | +1 | 0 | 0 |
+| rd_ability | +1 | 0 | 0 |
+| frontier | +1 | 0 | 0 |
+| gr_ltnoa | +1 | 0 | 0 |
+| ms | +1 | 0 | 0 |
+| oscore | -1 | 0 | 0 |
 
 ## Decile long-short portfolios (GROSS of costs)
 
@@ -173,22 +228,22 @@ Per feature, over all refits: `folds_kept` = refits with a non-zero coefficient;
 
 | portfolio | weighting | legs | ann_return | ann_vol | sharpe | nw_t_stat | max_drawdown | hit_rate | n_months | avg_stocks_per_leg |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ols | equal | decile | 0.1957 | 0.1241 | 1.58 | 6.60 | -0.205 | 0.740 | 285 | 369 |
-| ols | equal | band | 0.1663 | 0.1151 | 1.44 | 5.93 | -0.236 | 0.712 | 285 | 484 |
-| ols | value | decile | 0.1220 | 0.1440 | 0.85 | 3.50 | -0.362 | 0.596 | 285 | 357 |
-| ols | value | band | 0.1071 | 0.1298 | 0.83 | 3.35 | -0.298 | 0.593 | 285 | 468 |
-| enet | equal | decile | 0.1035 | 0.1343 | 0.77 | 3.51 | -0.306 | 0.544 | 285 | 305 |
-| enet | equal | band | 0.0850 | 0.1264 | 0.67 | 2.96 | -0.285 | 0.537 | 285 | 401 |
-| enet | value | decile | 0.0678 | 0.1610 | 0.42 | 1.81 | -0.488 | 0.456 | 285 | 300 |
-| enet | value | band | 0.0494 | 0.1488 | 0.33 | 1.48 | -0.420 | 0.449 | 285 | 393 |
-| lgbm | equal | decile | 0.1549 | 0.1285 | 1.21 | 5.22 | -0.169 | 0.646 | 285 | 370 |
-| lgbm | equal | band | 0.1395 | 0.1195 | 1.17 | 5.00 | -0.182 | 0.653 | 285 | 462 |
-| lgbm | value | decile | 0.0517 | 0.1630 | 0.32 | 1.52 | -0.306 | 0.533 | 285 | 351 |
-| lgbm | value | band | 0.0486 | 0.1545 | 0.31 | 1.43 | -0.459 | 0.540 | 285 | 438 |
-| combo | equal | decile | 0.1947 | 0.1403 | 1.39 | 5.54 | -0.251 | 0.723 | 285 | 370 |
-| combo | equal | band | 0.1689 | 0.1311 | 1.29 | 5.15 | -0.238 | 0.737 | 285 | 483 |
-| combo | value | decile | 0.1288 | 0.1645 | 0.78 | 3.40 | -0.329 | 0.607 | 285 | 359 |
-| combo | value | band | 0.1211 | 0.1518 | 0.80 | 3.51 | -0.280 | 0.607 | 285 | 468 |
+| ols | equal | decile | 0.2374 | 0.1165 | 2.04 | 8.41 | -0.111 | 0.751 | 285 | 370 |
+| ols | equal | band | 0.2086 | 0.1103 | 1.89 | 7.71 | -0.124 | 0.733 | 285 | 466 |
+| ols | value | decile | 0.1391 | 0.1490 | 0.93 | 4.21 | -0.282 | 0.596 | 285 | 355 |
+| ols | value | band | 0.1161 | 0.1363 | 0.85 | 4.02 | -0.246 | 0.596 | 285 | 447 |
+| enet | equal | decile | 0.1371 | 0.1437 | 0.95 | 4.50 | -0.266 | 0.565 | 285 | 320 |
+| enet | equal | band | 0.1186 | 0.1341 | 0.88 | 4.16 | -0.243 | 0.544 | 285 | 394 |
+| enet | value | decile | 0.0589 | 0.1980 | 0.30 | 1.44 | -0.582 | 0.460 | 285 | 310 |
+| enet | value | band | 0.0555 | 0.1781 | 0.31 | 1.55 | -0.488 | 0.484 | 285 | 381 |
+| lgbm | equal | decile | 0.1488 | 0.1524 | 0.98 | 4.83 | -0.247 | 0.656 | 285 | 371 |
+| lgbm | equal | band | 0.1286 | 0.1435 | 0.90 | 4.35 | -0.273 | 0.642 | 285 | 462 |
+| lgbm | value | decile | 0.0973 | 0.1957 | 0.50 | 2.40 | -0.467 | 0.554 | 285 | 357 |
+| lgbm | value | band | 0.0511 | 0.1897 | 0.27 | 1.31 | -0.479 | 0.512 | 285 | 445 |
+| combo | equal | decile | 0.2231 | 0.1456 | 1.53 | 7.20 | -0.245 | 0.737 | 285 | 370 |
+| combo | equal | band | 0.1964 | 0.1380 | 1.42 | 6.51 | -0.230 | 0.709 | 285 | 462 |
+| combo | value | decile | 0.1260 | 0.1936 | 0.65 | 3.34 | -0.442 | 0.554 | 285 | 357 |
+| combo | value | band | 0.0893 | 0.1794 | 0.50 | 2.62 | -0.370 | 0.565 | 285 | 446 |
 
 ## Decile long-short portfolios NET of costs
 
@@ -201,49 +256,49 @@ Per feature, over all refits: `folds_kept` = refits with a non-zero coefficient;
 
 | portfolio | weighting | legs | avg_turnover | sharpe | sharpe_net_10bps | sharpe_net_20bps | sharpe_net_50bps | avg_cost_bps | sharpe_net_est | breakeven_bps |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ols | equal | decile | 1.86 | 1.58 | 1.36 | 1.18 | 0.63 | 40 | 0.81 | 85 |
-| ols | equal | band | 1.15 | 1.44 | 1.28 | 1.16 | 0.80 | 42 | 0.90 | 117 |
-| ols | value | decile | 1.97 | 0.85 | 0.65 | 0.48 | -0.01 | 17 | 0.54 | 50 |
-| ols | value | band | 1.09 | 0.83 | 0.69 | 0.59 | 0.28 | 16 | 0.62 | 78 |
-| enet | equal | decile | 1.54 | 0.77 | 0.62 | 0.50 | 0.16 | 39 | 0.27 | 63 |
-| enet | equal | band | 0.97 | 0.67 | 0.56 | 0.48 | 0.25 | 41 | 0.31 | 82 |
-| enet | value | decile | 1.69 | 0.42 | 0.28 | 0.18 | -0.14 | 17 | 0.21 | 37 |
-| enet | value | band | 0.90 | 0.33 | 0.24 | 0.18 | -0.01 | 18 | 0.19 | 49 |
-| lgbm | equal | decile | 2.41 | 1.21 | 0.94 | 0.71 | 0.04 | 41 | 0.24 | 52 |
-| lgbm | equal | band | 1.81 | 1.17 | 0.94 | 0.76 | 0.21 | 41 | 0.37 | 62 |
-| lgbm | value | decile | 2.72 | 0.32 | 0.09 | -0.11 | -0.71 | 18 | -0.06 | 14 |
-| lgbm | value | band | 2.02 | 0.31 | 0.12 | -0.03 | -0.50 | 18 | 0.00 | 18 |
-| combo | equal | decile | 2.03 | 1.39 | 1.18 | 1.00 | 0.48 | 40 | 0.64 | 78 |
-| combo | equal | band | 1.31 | 1.29 | 1.13 | 1.01 | 0.65 | 41 | 0.75 | 104 |
-| combo | value | decile | 2.27 | 0.78 | 0.59 | 0.42 | -0.07 | 17 | 0.46 | 45 |
-| combo | value | band | 1.36 | 0.80 | 0.66 | 0.55 | 0.23 | 17 | 0.58 | 71 |
+| ols | equal | decile | 2.39 | 2.04 | 1.75 | 1.50 | 0.76 | 41 | 0.96 | 81 |
+| ols | equal | band | 1.67 | 1.89 | 1.66 | 1.48 | 0.93 | 42 | 1.07 | 102 |
+| ols | value | decile | 2.50 | 0.93 | 0.70 | 0.50 | -0.11 | 17 | 0.55 | 45 |
+| ols | value | band | 1.58 | 0.85 | 0.68 | 0.54 | 0.12 | 17 | 0.58 | 59 |
+| enet | equal | decile | 2.62 | 0.95 | 0.73 | 0.54 | -0.04 | 41 | 0.12 | 48 |
+| enet | equal | band | 1.98 | 0.88 | 0.69 | 0.54 | 0.07 | 42 | 0.19 | 54 |
+| enet | value | decile | 2.70 | 0.30 | 0.13 | -0.02 | -0.45 | 17 | 0.02 | 19 |
+| enet | value | band | 1.91 | 0.31 | 0.17 | 0.06 | -0.28 | 17 | 0.08 | 25 |
+| lgbm | equal | decile | 2.44 | 0.98 | 0.75 | 0.56 | -0.02 | 41 | 0.15 | 49 |
+| lgbm | equal | band | 1.83 | 0.90 | 0.71 | 0.55 | 0.10 | 42 | 0.22 | 56 |
+| lgbm | value | decile | 2.72 | 0.50 | 0.31 | 0.14 | -0.36 | 19 | 0.16 | 28 |
+| lgbm | value | band | 1.97 | 0.27 | 0.12 | -0.01 | -0.38 | 19 | 0.01 | 20 |
+| combo | equal | decile | 2.55 | 1.53 | 1.29 | 1.08 | 0.44 | 41 | 0.62 | 71 |
+| combo | equal | band | 1.87 | 1.42 | 1.22 | 1.06 | 0.57 | 42 | 0.70 | 85 |
+| combo | value | decile | 2.74 | 0.65 | 0.46 | 0.29 | -0.22 | 17 | 0.32 | 37 |
+| combo | value | band | 1.91 | 0.50 | 0.34 | 0.21 | -0.17 | 18 | 0.24 | 37 |
 
 ## Selection bias: deflated Sharpe ratio
 
 **Real data, out-of-sample, net of estimated costs. Asks whether the best portfolio beats what luck alone would give the best of many tries.**
 
-- Trials: 88 = the 16 portfolios above plus 72 seen or tried earlier and not shown here: 28 single-signal portfolios on the original 7 features, built in Steps 27-45; 16 ols, enet, lgbm and combo portfolios on the original 7 features (Steps 27-45); 16 ols, enet, lgbm and combo portfolios on 28 features (Step 51); 12 ridge and rolling-window OLS, equal- or value-weighted, on 7 and on 28 features and on this run's (tried, never built). A strategy we have looked at stays a trial even after it leaves the report. Every portfolio counts twice, plain and banded: the band is a second try at the same idea. Every row is judged against the same bar, since any of them could have been the one we picked.
-- Luck bar: with 88 skill-less trials whose Sharpes spread as ours do (std 0.50 annualised), the best would show a Sharpe of about 1.24 by chance (Bailey & Lopez de Prado 2014). The spread is measured on the 16 portfolios above plus the 28 earlier single-signal ones, rebuilt but not shown: the model portfolios alone are alike, and their narrower spread would lower the bar. The other earlier trials count in N only.
-- `psr`: probability the true Sharpe is above 0, allowing for skew and fat tails (Bailey & Lopez de Prado 2012). `dsr_nN`: probability it is above the luck bar for N trials. `dsr_n88` is the honest count; the others show how much the verdict depends on N. Above 0.95: survives selection.
+- Trials: 108 = the 16 portfolios above plus 92 seen or tried earlier and not shown here: 28 single-signal portfolios on the original 7 features, built in Steps 27-45; 16 ols, enet, lgbm and combo portfolios on the original 7 features (Steps 27-45); 16 ols, enet, lgbm and combo portfolios on 28 features (Step 51); 16 ols, enet, lgbm and combo portfolios on 99 features (Step 63); 16 ridge and rolling-window OLS, equal- or value-weighted, on 7, 28 and 99 features and on this run's (tried, never built). A strategy we have looked at stays a trial even after it leaves the report. Every portfolio counts twice, plain and banded: the band is a second try at the same idea. Every row is judged against the same bar, since any of them could have been the one we picked.
+- Luck bar: with 108 skill-less trials whose Sharpes spread as ours do (std 0.49 annualised), the best would show a Sharpe of about 1.26 by chance (Bailey & Lopez de Prado 2014). The spread is measured on the 16 portfolios above plus the 28 earlier single-signal ones, rebuilt but not shown: the model portfolios alone are alike, and their narrower spread would lower the bar. The other earlier trials count in N only.
+- `psr`: probability the true Sharpe is above 0, allowing for skew and fat tails (Bailey & Lopez de Prado 2012). `dsr_nN`: probability it is above the luck bar for N trials. `dsr_n108` is the honest count; the others show how much the verdict depends on N. Above 0.95: survives selection.
 
-| portfolio | weighting | legs | sharpe_net_est | psr | dsr_n20 | dsr_n88 | dsr_n100 |
+| portfolio | weighting | legs | sharpe_net_est | psr | dsr_n20 | dsr_n108 | dsr_n200 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| ols | equal | band | 0.90 | 1.000 | 0.420 | 0.065 | 0.053 |
-| ols | equal | decile | 0.81 | 1.000 | 0.266 | 0.027 | 0.021 |
-| combo | equal | band | 0.75 | 1.000 | 0.184 | 0.013 | 0.010 |
-| combo | equal | decile | 0.65 | 0.999 | 0.084 | 0.003 | 0.002 |
-| ols | value | band | 0.62 | 0.998 | 0.066 | 0.002 | 0.002 |
-| combo | value | band | 0.58 | 0.997 | 0.040 | 0.001 | 0.001 |
-| ols | value | decile | 0.54 | 0.994 | 0.030 | 0.001 | 0.000 |
-| combo | value | decile | 0.46 | 0.987 | 0.010 | 0.000 | 0.000 |
-| lgbm | equal | band | 0.37 | 0.965 | 0.002 | 0.000 | 0.000 |
-| enet | equal | band | 0.31 | 0.930 | 0.001 | 0.000 | 0.000 |
-| enet | equal | decile | 0.27 | 0.902 | 0.001 | 0.000 | 0.000 |
-| lgbm | equal | decile | 0.24 | 0.880 | 0.000 | 0.000 | 0.000 |
-| enet | value | decile | 0.21 | 0.841 | 0.000 | 0.000 | 0.000 |
-| enet | value | band | 0.19 | 0.819 | 0.000 | 0.000 | 0.000 |
-| lgbm | value | band | 0.00 | 0.502 | 0.000 | 0.000 | 0.000 |
-| lgbm | value | decile | -0.06 | 0.377 | 0.000 | 0.000 | 0.000 |
+| ols | equal | band | 1.07 | 1.000 | 0.744 | 0.180 | 0.079 |
+| ols | equal | decile | 0.97 | 1.000 | 0.554 | 0.074 | 0.026 |
+| combo | equal | band | 0.70 | 0.999 | 0.133 | 0.004 | 0.001 |
+| combo | equal | decile | 0.62 | 0.998 | 0.070 | 0.001 | 0.000 |
+| ols | value | band | 0.58 | 0.997 | 0.044 | 0.001 | 0.000 |
+| ols | value | decile | 0.56 | 0.996 | 0.032 | 0.000 | 0.000 |
+| combo | value | decile | 0.32 | 0.939 | 0.002 | 0.000 | 0.000 |
+| combo | value | band | 0.24 | 0.876 | 0.000 | 0.000 | 0.000 |
+| lgbm | equal | band | 0.22 | 0.862 | 0.000 | 0.000 | 0.000 |
+| enet | equal | band | 0.19 | 0.824 | 0.000 | 0.000 | 0.000 |
+| lgbm | value | decile | 0.16 | 0.783 | 0.000 | 0.000 | 0.000 |
+| lgbm | equal | decile | 0.15 | 0.772 | 0.000 | 0.000 | 0.000 |
+| enet | equal | decile | 0.12 | 0.725 | 0.000 | 0.000 | 0.000 |
+| enet | value | band | 0.08 | 0.659 | 0.000 | 0.000 | 0.000 |
+| enet | value | decile | 0.02 | 0.539 | 0.000 | 0.000 | 0.000 |
+| lgbm | value | band | 0.01 | 0.516 | 0.000 | 0.000 | 0.000 |
 
 ## Estimated trading cost by company size
 
@@ -266,7 +321,7 @@ Per feature, over all refits: `folds_kept` = refits with a non-zero coefficient;
 **Real data, out-of-sample months (same as the models). Each raw signal used directly as a forecast; IC only, no portfolios.**
 
 - `osap`: the Open Source Asset Pricing signal it replicates (blank: our own). `published_sign`: the direction its original paper reported, from the signal catalogue; a NEGATIVE IC is the expected result for a `-1` signal.
-- `sign_agrees`: our out-of-sample IC has the published sign. 69 of 99 agree; 35 agree with |NW t| >= 2.
+- `sign_agrees`: our out-of-sample IC has the published sign. 106 of 154 agree; 59 agree with |NW t| >= 2.
 - Signals are not traded on their own any more; the 28 single-signal portfolios built earlier still count as trials (see the deflated Sharpe ratio).
 
 | feature | osap | published_sign | mean_ic | ic_nw_t_stat | ic_hit_rate | ic_months | sign_agrees |
@@ -370,3 +425,58 @@ Per feature, over all refits: `folds_kept` = refits with a non-zero coefficient;
 | ch_tax | ChTax | +1 | 0.0141 | 4.33 | 0.635 | 285 | yes |
 | num_earn_increase | NumEarnIncrease | +1 | 0.0186 | 5.64 | 0.670 | 285 | yes |
 | book_leverage | BookLeverage | -1 | 0.0153 | 2.46 | 0.530 | 285 | no |
+| beta | Beta | +1 | -0.0041 | -0.46 | 0.491 | 285 | no |
+| beta_liquidity_ps | BetaLiquidityPS | +1 | 0.0056 | 1.49 | 0.523 | 285 | yes |
+| residual_momentum | ResidualMomentum | +1 | 0.0028 | 0.61 | 0.523 | 285 | yes |
+| coskewness | Coskewness | -1 | -0.0217 | -4.19 | 0.425 | 285 | yes |
+| idio_vol_3f | IdioVol3F | -1 | -0.0459 | -6.15 | 0.375 | 285 | yes |
+| return_skew_3f | ReturnSkew3F | -1 | -0.0071 | -3.83 | 0.425 | 285 | yes |
+| realized_vol | RealizedVol | -1 | -0.0420 | -4.86 | 0.393 | 285 | yes |
+| idio_vol_aht | IdioVolAHT | -1 | -0.0430 | -4.98 | 0.404 | 285 | yes |
+| beta_vix | betaVIX | -1 | -0.0042 | -1.16 | 0.516 | 285 | yes |
+| coskew_acx | CoskewACX | -1 | -0.0104 | -2.38 | 0.442 | 285 | yes |
+| beta_fp | BetaFP | +1 | -0.0036 | -0.38 | 0.509 | 285 | no |
+| beta_tail_risk | BetaTailRisk | +1 | 0.0009 | 0.11 | 0.524 | 273 | yes |
+| price_delay_rsq | PriceDelayRsq | +1 | -0.0292 | -6.14 | 0.382 | 285 | no |
+| price_delay_slope | PriceDelaySlope | +1 | -0.0149 | -4.88 | 0.407 | 285 | no |
+| price_delay_tstat | PriceDelayTstat | +1 | -0.0149 | -4.88 | 0.407 | 285 | no |
+| ind_mom | IndMom | +1 | 0.0037 | 0.69 | 0.547 | 285 | yes |
+| ind_ret_big | IndRetBig | +1 | 0.0126 | 2.20 | 0.533 | 285 | yes |
+| herf | Herf | -1 | 0.0040 | 0.88 | 0.554 | 285 | no |
+| herf_asset | HerfAsset | -1 | 0.0055 | 1.14 | 0.565 | 285 | no |
+| herf_be | HerfBE | -1 | 0.0048 | 1.04 | 0.551 | 285 | no |
+| ch_inv_ia | ChInvIA | -1 | 0.0050 | 1.36 | 0.544 | 285 | no |
+| abnormal_accruals | AbnormalAccruals | -1 | -0.0041 | -2.08 | 0.467 | 285 | yes |
+| earnings_surprise | EarningsSurprise | +1 | 0.0116 | 3.89 | 0.635 | 285 | yes |
+| revenue_surprise | RevenueSurprise | +1 | 0.0128 | 3.58 | 0.639 | 285 | yes |
+| earn_sup_big | EarnSupBig | +1 | 0.0077 | 1.59 | 0.565 | 285 | yes |
+| earnings_consistency | EarningsConsistency | +1 | 0.0156 | 4.06 | 0.628 | 285 | yes |
+| div_init | DivInit | +1 | 0.0031 | 2.43 | 0.547 | 285 | yes |
+| div_omit | DivOmit | -1 | -0.0017 | -1.68 | 0.467 | 285 | yes |
+| div_season | DivSeason | +1 | 0.0141 | 5.75 | 0.642 | 285 | yes |
+| div_yield_st | DivYieldST | +1 | 0.0142 | 5.68 | 0.635 | 285 | yes |
+| exch_switch | ExchSwitch | -1 | -0.0008 | -0.87 | 0.463 | 285 | yes |
+| spinoff | Spinoff | +1 | 0.0023 | 1.47 | 0.547 | 285 | yes |
+| ind_ipo | IndIPO | -1 | -0.0139 | -3.29 | 0.463 | 285 | yes |
+| rd_ipo | RDIPO | -1 | -0.0034 | -1.43 | 0.467 | 285 | yes |
+| firm_age_mom | FirmAgeMom | +1 | 0.0246 | 3.85 | 0.611 | 285 | yes |
+| intan_bm | IntanBM | -1 | 0.0024 | 0.37 | 0.505 | 285 | no |
+| intan_sp | IntanSP | -1 | -0.0009 | -0.14 | 0.512 | 285 | yes |
+| intan_cfp | IntanCFP | -1 | -0.0106 | -1.72 | 0.439 | 285 | yes |
+| intan_ep | IntanEP | -1 | -0.0129 | -2.19 | 0.449 | 285 | yes |
+| comp_equ_iss | CompEquIss | -1 | -0.0145 | -3.66 | 0.396 | 285 | yes |
+| equity_duration | EquityDuration | -1 | -0.0221 | -3.43 | 0.456 | 285 | yes |
+| accruals_bm | AccrualsBM | +1 | -0.0036 | -0.39 | 0.512 | 285 | no |
+| inv_growth | InvGrowth | -1 | -0.0053 | -1.42 | 0.484 | 285 | yes |
+| mean_rank_rev_growth | MeanRankRevGrowth | +1 | -0.0067 | -1.67 | 0.447 | 273 | no |
+| rd_cap | RDcap | +1 | -0.0529 | -7.02 | 0.302 | 285 | no |
+| var_cf | VarCF | -1 | -0.0190 | -2.75 | 0.453 | 285 | yes |
+| org_cap | OrgCap | +1 | -0.0058 | -2.27 | 0.449 | 285 | no |
+| ps | PS | +1 | 0.0188 | 2.64 | 0.600 | 285 | yes |
+| rd_ability | RDAbility | +1 | -0.0010 | -0.14 | 0.465 | 273 | no |
+| frontier | Frontier | +1 | -0.0042 | -0.75 | 0.460 | 285 | no |
+| gr_ltnoa | GrLTNOA | +1 | -0.0056 | -2.26 | 0.428 | 285 | no |
+| ms | MS | +1 | 0.0365 | 8.55 | 0.688 | 285 | yes |
+| oscore | OScore | -1 | -0.0313 | -8.12 | 0.316 | 285 | yes |
+| rds | RDS | +1 | -0.0108 | -4.67 | 0.361 | 285 | no |
+| trend_factor | TrendFactor | +1 | 0.0211 | 3.52 | 0.589 | 285 | yes |
