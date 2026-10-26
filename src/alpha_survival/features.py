@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from alpha_survival.data.real import PRICE_DELAY_COLUMNS, PRICE_DELAY_K, PRICE_DELAY_LAGS
-from alpha_survival.ols import solve_normal_equations
+from alpha_survival.ols import group_ols, solve_normal_equations
 
 # 12-1 momentum compounds the monthly returns of t-11 .. t-1: from the close at
 # the end of t-12 to the close at the end of t-1 (Jegadeesh & Titman 1993).
@@ -1560,6 +1560,58 @@ def add_industry_accounting(panel: pd.DataFrame) -> pd.DataFrame:
         herf_be=herfindahl(book),
         ch_inv_ia=change - change.groupby(sic2).transform("mean"),
     )
+
+
+ABACC_MIN_FIRMS = 6  # AbnormalAccruals: >= 6 firms in the industry-month regression
+ABACC_TRIM = (0.001, 0.999)  # AbnormalAccruals: inputs outside the month's 0.1-99.9% dropped
+
+
+def add_abnormal_accruals(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `abnormal_accruals`: the residual of a cross-sectional modified-Jones
+    regression (AbnormalAccruals; Xie 2001; OSAP's code).
+
+    Each month and 2-digit SIC industry (today's code: approximate), regress
+    accruals / lagged assets on 1 / lagged assets, the 12-month change in revenue /
+    lagged assets and net PP&E / lagged assets, with an intercept, over firms with
+    all four (>= 6 firms). Accruals = net income - operating cash flow; lagged
+    assets are the stock's own row 12 months earlier. OSAP runs it once per fiscal
+    year on Compustat (income before extraordinary items, gross PP&E); ours runs
+    on the latest public filings each month. Inputs in USD (`_usd`), since 1 /
+    assets depends on the currency; each is dropped outside the month's 0.1-99.9%
+    percentiles, as OSAP's yearly trim. Known at month_end.
+    """
+    panel = _sorted_by_stock(panel)
+    lagged = _months_ago(panel, _usd(panel, "assets"), 12)
+    lagged = lagged.where(lagged > 0)
+    revenue = _usd(panel, "revenue")
+    inputs = pd.DataFrame(
+        {
+            "accruals": (_usd(panel, "netinc") - _usd(panel, "ncfo")) / lagged,
+            "inv_assets": 1 / lagged,
+            "d_revenue": (revenue - _months_ago(panel, revenue, 12)) / lagged,
+            "ppe": _usd(panel, "ppnenet") / lagged,
+        }
+    )
+    by_month = inputs.groupby(panel["month_end"])
+    low = by_month.transform("quantile", ABACC_TRIM[0])
+    high = by_month.transform("quantile", ABACC_TRIM[1])
+    inputs = inputs.where((inputs >= low) & (inputs <= high))
+
+    use = inputs.notna().all(axis=1) & panel["sic_code"].notna()
+    groups = pd.Series(np.nan, index=panel.index)
+    keys = pd.DataFrame({"m": panel["month_end"], "s": panel["sic_code"] // SIC2})[use]
+    groups[use] = keys.groupby(["m", "s"]).ngroup()
+    size = groups.map(groups.value_counts())
+    use &= size >= ABACC_MIN_FIRMS
+    codes = groups[use].astype(int).to_numpy()
+    rows = inputs[use]
+    xs = [np.ones(len(rows)), *(rows[c].to_numpy() for c in ["inv_assets", "d_revenue", "ppe"])]
+    y = rows["accruals"].to_numpy()
+    b = group_ols(codes, int(codes.max(initial=-1)) + 1, y, xs, np.ones(len(y), bool))
+    fitted = sum(b[codes, i] * xs[i] for i in range(len(xs)))
+    resid = pd.Series(np.nan, index=panel.index)
+    resid[use] = y - fitted
+    return _with(panel, abnormal_accruals=resid)
 
 
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:

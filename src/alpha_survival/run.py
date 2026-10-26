@@ -20,6 +20,7 @@ from alpha_survival.data.external import monthly_factors
 from alpha_survival.data.quality import markdown_table
 from alpha_survival.data.real import load_panel
 from alpha_survival.features import (
+    add_abnormal_accruals,
     add_accrual_signals,
     add_asset_growth,
     add_balance_sheet_changes,
@@ -163,6 +164,7 @@ def prepare(panel: pd.DataFrame, factors: pd.DataFrame | None = None) -> pd.Data
     panel = add_residual_momentum_coskewness(add_factor_betas(panel, factors), factors)
     panel = add_tail_risk_beta(add_coskew_acx_beta_fp(add_daily_factor_signals(panel)))
     panel = add_industry_accounting(add_industry_signals(add_price_delay(panel)))
+    panel = add_abnormal_accruals(panel)
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
 

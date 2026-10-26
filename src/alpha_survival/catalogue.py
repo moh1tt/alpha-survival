@@ -174,6 +174,8 @@ FEATURE_ACRONYMS = {
     "herf_asset": "HerfAsset",
     "herf_be": "HerfBE",
     "ch_inv_ia": "ChInvIA",
+    # Step 73: abnormal accruals
+    "abnormal_accruals": "AbnormalAccruals",
 }
 
 

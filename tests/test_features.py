@@ -1746,3 +1746,64 @@ def test_industry_accounting_ignores_later_months():
     b = features.add_industry_accounting(wild).loc[lambda d: d["month_end"] == t, cols]
     assert a.iloc[:3].notna().all().all()
     pd.testing.assert_frame_equal(a, b)
+
+
+def accruals_panel(n_firms=12, seed=0):
+    """Two months a year apart; firms 1..n in SIC 3571, plus 3 banks (too few to fit)."""
+    rng = np.random.default_rng(seed)
+    months = pd.to_datetime(["2020-01-31", "2021-01-31"])
+    firms = list(range(1, n_firms + 4))
+    panel = pd.DataFrame([(s, m) for s in firms for m in months])
+    panel.columns = ["permaticker", "month_end"]
+    for col in ["assets", "revenue", "ppnenet"]:
+        panel[col] = rng.uniform(50, 500, len(panel))
+    panel["netinc"] = rng.normal(10, 5, len(panel))
+    panel["ncfo"] = rng.normal(15, 5, len(panel))
+    panel["fxusd"] = 1.0
+    panel["sic_code"] = np.where(panel["permaticker"] <= n_firms, 3571.0, 6022.0)
+    return panel
+
+
+def test_abnormal_accruals_is_the_industry_regression_residual():
+    panel = accruals_panel()
+    out = features.add_abnormal_accruals(panel)
+    now = panel[panel["month_end"] == "2021-01-31"].set_index("permaticker")
+    then = panel[panel["month_end"] == "2020-01-31"].set_index("permaticker")
+    lag = then["assets"]
+    inputs = pd.DataFrame(
+        {
+            "y": (now["netinc"] - now["ncfo"]) / lag,
+            "inv": 1 / lag,
+            "drev": (now["revenue"] - then["revenue"]) / lag,
+            "ppe": now["ppnenet"] / lag,
+        }
+    )
+    # With 15 firms, the 0.1% and 99.9% percentiles sit just inside the min and max
+    # of each input over the month (banks included): those firms drop out.
+    extreme = (inputs == inputs.min()) | (inputs == inputs.max())
+    kept = [s for s in range(1, 13) if not extreme.loc[s].any()]
+    design = np.column_stack([np.ones(len(kept)), inputs.loc[kept, ["inv", "drev", "ppe"]]])
+    y = inputs.loc[kept, "y"].to_numpy()
+    resid = y - design @ np.linalg.lstsq(design, y, rcond=None)[0]
+
+    got = out[out["month_end"] == "2021-01-31"].set_index("permaticker")["abnormal_accruals"]
+    assert got.loc[kept].to_numpy() == pytest.approx(resid)
+    assert got.drop(kept).isna().all()  # trimmed firms, and 3 banks: fewer than 6 firms
+    assert len(kept) >= 6
+    assert out.loc[out["month_end"] == "2020-01-31", "abnormal_accruals"].isna().all()
+
+
+def test_abnormal_accruals_ignores_later_months():
+    # Leakage test: a later month's filings cannot move month t.
+    panel = accruals_panel()
+    extra = panel[panel["month_end"] == "2021-01-31"].assign(
+        month_end=pd.Timestamp("2022-01-31"), netinc=1e9, assets=1e-3
+    )
+    wild = pd.concat([panel, extra], ignore_index=True)
+    t = panel["month_end"] == "2021-01-31"
+    a = features.add_abnormal_accruals(panel).loc[t.to_numpy(), "abnormal_accruals"]
+    b = features.add_abnormal_accruals(wild)
+    b = b.loc[b["month_end"] == "2021-01-31", "abnormal_accruals"]
+    assert a.notna().any()
+    assert a.to_numpy() == pytest.approx(b.to_numpy(), nan_ok=True)
+

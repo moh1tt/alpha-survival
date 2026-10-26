@@ -14,7 +14,7 @@ import pandas as pd
 
 from alpha_survival.data.external import daily_factors
 from alpha_survival.data.sharadar import RAW_DIR
-from alpha_survival.ols import solve_normal_equations
+from alpha_survival.ols import group_ols
 
 # Sharadar column -> our column name.
 SECURITY_MASTER_COLUMNS = {
@@ -360,25 +360,6 @@ FACTOR_SUMMARY_COLUMNS = [
 ]
 
 
-def _group_ols(
-    codes: np.ndarray, n_groups: int, y: np.ndarray, xs: list[np.ndarray], use: np.ndarray
-) -> np.ndarray:
-    """OLS of `y` on the columns `xs` within each group (`codes`), over rows where
-    `use` is True: (n_groups, len(xs)) coefficients, NaN where X'X is singular."""
-
-    def total(values: np.ndarray) -> np.ndarray:
-        return np.bincount(codes, weights=np.where(use, values, 0.0), minlength=n_groups)
-
-    k = len(xs)
-    xtx = np.empty((n_groups, k, k))
-    xty = np.empty((n_groups, k))
-    for i in range(k):
-        xty[:, i] = total(xs[i] * y)
-        for j in range(i, k):
-            xtx[:, i, j] = xtx[:, j, i] = total(xs[i] * xs[j])
-    return solve_normal_equations(xtx, xty)
-
-
 def daily_factor_summaries(daily: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame:
     """Per (permaticker, month): summaries of daily excess returns y = dret - rf and
     their factor regressions, over the month's days that have y and the FF3 factors.
@@ -427,10 +408,10 @@ def daily_factor_summaries(daily: pd.DataFrame, factors: pd.DataFrame) -> pd.Dat
     def total(values: np.ndarray, use: np.ndarray = ff) -> np.ndarray:
         return np.bincount(codes, weights=np.where(use, values, 0.0), minlength=n)
 
-    b = _group_ols(codes, n, y, [ones, mkt, smb, hml], ff)
+    b = group_ols(codes, n, y, [ones, mkt, smb, hml], ff)
     resid = y - b[codes, 0] - b[codes, 1] * mkt - b[codes, 2] * smb - b[codes, 3] * hml
     fitted = ~np.isnan(b[:, 0])
-    vix_b = _group_ols(codes, n, y, [ones, mkt, dvix], vx)
+    vix_b = group_ols(codes, n, y, [ones, mkt, dvix], vx)
 
     rf = d["rf"].to_numpy()
     with np.errstate(invalid="ignore"):
