@@ -971,3 +971,26 @@ def test_market_tail_index_uses_each_months_own_days():
     crash.loc[200:, "dret"] = -0.5 + rng.normal(0, 0.1, 200)
     jan = pd.Period("2024-01", "M")
     assert real.market_tail_index(calm)[jan] == real.market_tail_index(crash)[jan]
+
+
+def test_price_delay_sums_by_hand():
+    dates = pd.bdate_range("2024-01-01", "2024-02-29")
+    factors = factor_days(dates)
+    daily = daily_rets(dates).drop(index=[10, 30])  # the stock misses two days
+    out = real.daily_factor_summaries(daily, factors)
+
+    # Lags step back through the factor file's days, not the stock's own rows.
+    lags = [factors["mktrf"].shift(n) for n in range(1, real.PRICE_DELAY_LAGS + 1)]
+    x = pd.concat([factors["mktrf"], *lags], axis=1).loc[daily["date"]].to_numpy()
+    x = np.column_stack([np.ones(len(x)), x])
+    y = (daily["dret"] - factors["rf"].loc[daily["date"]].to_numpy()).to_numpy()
+    for month, row in [("2024-01", out.iloc[0]), ("2024-02", out.iloc[1])]:
+        use = (daily["month"] == month).to_numpy() & ~np.isnan(x).any(axis=1)
+        xu, yu = x[use], y[use]
+        assert row["pd_yy"] == pytest.approx(yu @ yu)
+        for i in range(real.PRICE_DELAY_K):
+            assert row[f"pd_xy{i}"] == pytest.approx(xu[:, i] @ yu)
+            for j in range(i, real.PRICE_DELAY_K):
+                assert row[f"pd_xx{i}{j}"] == pytest.approx(xu[:, i] @ xu[:, j])
+    # The file's first 4 days have no 4-day lag; the stock's first day has no return.
+    assert out.iloc[0]["pd_xx00"] == (daily["month"] == "2024-01").sum() - 4

@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from alpha_survival.data.real import PRICE_DELAY_COLUMNS, PRICE_DELAY_K, PRICE_DELAY_LAGS
 from alpha_survival.ols import solve_normal_equations
 
 # 12-1 momentum compounds the monthly returns of t-11 .. t-1: from the close at
@@ -1397,6 +1398,71 @@ def add_tail_risk_beta(panel: pd.DataFrame) -> pd.DataFrame:
     tail = panel.groupby("month_end")["market_tail"].first().reindex(rets.index)
     fit = _rolling_ols(rets, tail.to_frame("tail"), TAIL_MONTHS, TAIL_MIN)
     return _with(panel, beta_tail_risk=_at_rows(fit["tail"], panel, rets))
+
+
+PD_MONTHS, PD_MIN_DAYS = 12, 26  # price delay: July-June daily regressions, >= 26 days
+PD_FIT_MONTH = 6  # fitted at each June's end, used from July (one month skipped)
+
+
+def add_price_delay(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `price_delay_rsq`, `price_delay_slope`, `price_delay_tstat`: how slowly a
+    stock's price takes in market news (Hou & Moskowitz 2005; OSAP's code).
+
+    Each June, regress the stock's daily excess returns from July to June (>= 26
+    days, at least one in June) on mktrf and its 4 previous trading days' values,
+    from the `pd_*` sums of data.real.daily_factor_summaries. With b0 the slope on
+    today's market and b1 .. b4 those on the lags, t their t-statistics:
+    - `price_delay_rsq` (D1): 1 - R^2 without the lags / R^2 with them. The short
+      regression uses the same days.
+    - `price_delay_slope` (D2): sum(n b_n) / (b0 + sum(b_n)).
+    - `price_delay_tstat` (D3): D2 with t-statistics, sum(n t_n) / (t0 + sum(t_n)),
+      as the paper and OSAP's Python code (its Stata code divides by b0). We skip
+      OSAP's Stata 10/90 trim: the rank normalisation already tames outliers.
+    The values sit on July's row (one month skipped, as the paper) and the next 11,
+    so each row only uses days up to the June before it.
+    """
+    panel = _sorted_by_stock(panel)
+    grids = {c: _calendar_grid(panel, c) for c in PRICE_DELAY_COLUMNS}
+    like = grids["pd_yy"]
+    june = np.flatnonzero(like.index.month == PD_FIT_MONTH)
+    year = {c: g.rolling(PD_MONTHS, min_periods=1).sum().to_numpy()[june] for c, g in grids.items()}
+    traded_in_june = grids["pd_xx00"].to_numpy()[june] > 0
+    rows, cols = np.nonzero(traded_in_june & (year["pd_xx00"] >= PD_MIN_DAYS))
+
+    k = PRICE_DELAY_K
+    xtx = np.empty((len(rows), k, k))
+    xty = np.empty((len(rows), k))
+    for i in range(k):
+        xty[:, i] = year[f"pd_xy{i}"][rows, cols]
+        for j in range(i, k):
+            xtx[:, i, j] = xtx[:, j, i] = year[f"pd_xx{i}{j}"][rows, cols]
+    yy, days = year["pd_yy"][rows, cols], xtx[:, 0, 0]
+
+    b = solve_normal_equations(xtx, xty)
+    short = solve_normal_equations(xtx[:, :2, :2], xty[:, :2])
+    ssr = yy - np.einsum("ij,ij->i", b, xty)
+    ssr_short = yy - np.einsum("ij,ij->i", short, xty[:, :2])
+    sst = yy - xty[:, 0] ** 2 / days
+    inv_diag = np.full(b.shape, np.nan)
+    fitted = ~np.isnan(b[:, 0])
+    inv_diag[fitted] = np.diagonal(np.linalg.inv(xtx[fitted]), axis1=1, axis2=2)
+    weights = np.arange(1, PRICE_DELAY_LAGS + 1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        t = b / np.sqrt((np.clip(ssr, 0, None) / (days - k))[:, None] * inv_diag)
+        r2, r2_short = 1 - ssr / sst, 1 - ssr_short / sst
+        values = {
+            "price_delay_rsq": np.where(r2 > 0, 1 - r2_short / r2, np.nan),
+            "price_delay_slope": b[:, 2:] @ weights / (b[:, 1] + b[:, 2:].sum(axis=1)),
+            "price_delay_tstat": t[:, 2:] @ weights / (t[:, 1] + t[:, 2:].sum(axis=1)),
+        }
+
+    added = {}
+    for name, value in values.items():
+        grid = np.full(like.shape, np.nan)
+        grid[june[rows], cols] = value
+        fit = pd.DataFrame(grid, index=like.index, columns=like.columns)
+        added[name] = _at_rows(fit.shift(1).ffill(limit=PD_MONTHS - 1), panel, like)
+    return _with(panel, **added)
 
 
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:

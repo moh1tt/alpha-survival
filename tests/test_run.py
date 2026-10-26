@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from alpha_survival import run
+from alpha_survival.data.real import PRICE_DELAY_K
 from alpha_survival.models import HistoricalMean
 from alpha_survival.run import (
     COST_BPS,
@@ -111,6 +112,15 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["lx_lm_sum"] = panel["l3x_l3m_sum"] = rng.normal(0, 0.001, len(panel))
     panel["lx_lm2_sum"] = rng.normal(0, 1e-5, len(panel))
     panel["l3_n"] = 21
+    # Price-delay sums: 21 days of (1, mktrf, 4 lags), a diagonal-heavy X'X.
+    delay = {}
+    for i in range(PRICE_DELAY_K):
+        delay[f"pd_xy{i}"] = rng.normal(0, 1e-3, len(panel))
+        delay[f"pd_xx{i}{i}"] = 21 * rng.uniform(5e-5, 2e-4, len(panel))
+        for j in range(i + 1, PRICE_DELAY_K):
+            delay[f"pd_xx{i}{j}"] = rng.normal(0, 1e-5, len(panel))
+    delay |= {"pd_xx00": 21, "pd_yy": panel["xret_sumsq"]}
+    panel = pd.concat([panel, pd.DataFrame(delay, index=panel.index)], axis=1)
     panel["market_tail"] = panel["month_end"].map(
         dict(zip(MONTHS, rng.uniform(0.3, 0.6, N_MONTHS), strict=True))
     )
@@ -209,7 +219,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 111
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 114
 
 
 def test_prepare_ranks_among_investable_stocks_only():

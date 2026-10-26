@@ -1522,3 +1522,84 @@ def test_beta_tail_risk_ignores_later_months():
     a = features.add_tail_risk_beta(panel).loc[t, "beta_tail_risk"]
     b = features.add_tail_risk_beta(wild).loc[t, "beta_tail_risk"]
     assert a == pytest.approx(b)
+
+
+def delay_panel(end="2024-08-31", wild_after=None, drop=None, seed=0):
+    """Monthly panel built from simulated daily data by data.real.daily_factor_summaries:
+    one stock that reacts to the market partly a day late. `wild_after`: a date after
+    which returns and market go wild; `drop`: a date range the stock does not trade."""
+    from alpha_survival.data import real
+
+    rng = np.random.default_rng(seed)
+    dates = pd.bdate_range("2022-07-01", end)
+    mkt = pd.Series(rng.normal(0, 0.01, len(dates)), index=dates)
+    ret = 0.6 * mkt + 0.4 * mkt.shift(1).fillna(0) + rng.normal(0, 0.01, len(dates))
+    if wild_after is not None:
+        mkt[mkt.index > wild_after] = 0.5
+        ret[ret.index > wild_after] = 9.0
+    factors = pd.DataFrame({"mktrf": mkt, "smb": 0.001, "hml": -0.001, "dvix": 0.0, "rf": 0.0})
+    factors["smb"] = rng.normal(0, 0.005, len(dates))  # vary, so the FF3 fit is solvable
+    factors["hml"] = rng.normal(0, 0.005, len(dates))
+    daily = pd.DataFrame({"permaticker": 1, "date": dates, "dret": ret.to_numpy()})
+    if drop is not None:
+        daily = daily[~daily["date"].between(*drop)]
+    daily["month"] = daily["date"].dt.to_period("M")
+    sums = real.daily_factor_summaries(daily, factors).reset_index()
+    sums["month_end"] = sums.pop("month").dt.to_timestamp(how="end").dt.normalize()
+    return sums, factors, daily
+
+
+def price_delay_by_hand(factors, daily, first, last):
+    """D1, D2, D3 from a least-squares fit on the stock's days in [first, last]."""
+    m = factors["mktrf"]
+    x = pd.concat([m, *(m.shift(n) for n in range(1, 5))], axis=1).loc[daily["date"]]
+    use = daily["date"].between(first, last).to_numpy() & x.notna().all(axis=1).to_numpy()
+    design = np.column_stack([np.ones(use.sum()), x.to_numpy()[use]])
+    y = daily["dret"].to_numpy()[use]
+    b, ssr = np.linalg.lstsq(design, y, rcond=None)[:2]
+    se = np.sqrt(ssr[0] / (len(y) - 6) * np.diag(np.linalg.inv(design.T @ design)))
+    t = b / se
+    sst = ((y - y.mean()) ** 2).sum()
+    short = np.linalg.lstsq(design[:, :2], y, rcond=None)[1][0]
+    d1 = 1 - (1 - short / sst) / (1 - ssr[0] / sst)
+    w = np.arange(1, 5)
+    return d1, b[2:] @ w / (b[1] + b[2:].sum()), t[2:] @ w / (t[1] + t[2:].sum())
+
+
+DELAY_COLS = ["price_delay_rsq", "price_delay_slope", "price_delay_tstat"]
+
+
+def test_price_delay_by_hand_july_to_june_used_from_july():
+    sums, factors, daily = delay_panel()
+    out = features.add_price_delay(sums).set_index("month_end")[DELAY_COLS]
+    fit23 = price_delay_by_hand(factors, daily, "2022-07-01", "2023-06-30")
+    fit24 = price_delay_by_hand(factors, daily, "2023-07-01", "2024-06-30")
+    assert out.loc[:"2023-06-30"].isna().all().all()  # nothing before the first July
+    for month in ["2023-07-31", "2024-06-30"]:  # July and the 11 months after
+        assert out.loc[month].to_numpy() == pytest.approx(fit23)
+    assert out.loc["2024-07-31"].to_numpy() == pytest.approx(fit24)
+    assert out.loc["2023-07-31", "price_delay_slope"] > 0  # the stock does react late
+
+
+def test_price_delay_needs_26_days_and_a_june_trade():
+    # No trades from 1 May to 30 June 2023: the 2023 fit has days but none in June.
+    sums, _, _ = delay_panel(drop=("2023-05-01", "2023-06-30"))
+    out = features.add_price_delay(sums).set_index("month_end")[DELAY_COLS]
+    assert out.loc["2023-07-31":"2024-06-30"].isna().all().all()
+    assert out.loc["2024-07-31"].notna().all()
+    # Trading only from 6 June 2023: under 26 days in the 2023 window.
+    sums, _, _ = delay_panel(drop=("2022-07-01", "2023-06-05"))
+    out = features.add_price_delay(sums).set_index("month_end")[DELAY_COLS]
+    assert out.loc["2023-07-31"].isna().all()
+
+
+def test_price_delay_ignores_days_after_the_june_fit():
+    # Leakage test: wild returns and market after June 2023 cannot move the values
+    # used from July 2023 to June 2024.
+    a, _, _ = delay_panel()
+    b, _, _ = delay_panel(wild_after="2023-06-30")
+    rows = slice("2023-07-31", "2024-06-30")
+    got_a = features.add_price_delay(a).set_index("month_end").loc[rows, DELAY_COLS]
+    got_b = features.add_price_delay(b).set_index("month_end").loc[rows, DELAY_COLS]
+    assert got_a.notna().all().all()
+    pd.testing.assert_frame_equal(got_a, got_b)

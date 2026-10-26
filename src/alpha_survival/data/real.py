@@ -322,6 +322,15 @@ def build_monthly_returns(
     return monthly[cols].reset_index(drop=True)
 
 
+PRICE_DELAY_LAGS = 4  # Hou & Moskowitz (2005): market returns of the 4 trading days before
+# Price-delay regressors, in order: intercept, mktrf, mktrf lagged 1 .. 4 trading days.
+PRICE_DELAY_K = 2 + PRICE_DELAY_LAGS
+PRICE_DELAY_COLUMNS = [
+    "pd_yy",
+    *(f"pd_xy{i}" for i in range(PRICE_DELAY_K)),
+    *(f"pd_xx{i}{j}" for i in range(PRICE_DELAY_K) for j in range(i, PRICE_DELAY_K)),
+]
+
 # Per-month summaries of daily factor regressions (see daily_factor_summaries).
 FACTOR_SUMMARY_COLUMNS = [
     "xret_n",
@@ -346,6 +355,7 @@ FACTOR_SUMMARY_COLUMNS = [
     "l3m_sum",
     "l3m_sumsq",
     "l3x_l3m_sum",
+    *PRICE_DELAY_COLUMNS,
 ]
 
 
@@ -390,10 +400,17 @@ def daily_factor_summaries(daily: pd.DataFrame, factors: pd.DataFrame) -> pd.Dat
       fall in the month before), their squares and cross-product (Frazzini &
       Pedersen 2014). OSAP's BetaFP takes log(1 + dret - rf) and log(1 + mktrf):
       the same up to terms of order rf x return, about 1e-6 a day.
+    - `pd_yy`, `pd_xy<i>`, `pd_xx<i><j>`: sums of y^2, x_i y and x_i x_j (i <= j) for
+      the price-delay regressors x = (1, mktrf, mktrf of the 1 .. 4 previous trading
+      days in the factor file; `PRICE_DELAY_COLUMNS`), over days with y and all of x.
+      Enough for the regression of y on x, or on its first two columns, over any run
+      of months (Hou & Moskowitz 2005). The lags reach back only, never forward.
     All from days up to the month's end, so known at its end.
     """
     d = daily[["permaticker", "month", "date", "dret"]].sort_values(["permaticker", "date"])
-    d = d.join(factors, on="date")
+    market = factors["mktrf"].sort_index()
+    lags = {f"pd_mkt_l{n}": market.shift(n) for n in range(1, PRICE_DELAY_LAGS + 1)}
+    d = d.join(factors, on="date").join(pd.DataFrame(lags), on="date")
     groups = d.groupby(["permaticker", "month"], sort=True)
     codes = groups.ngroup().to_numpy()
     index = groups.size().index
@@ -429,6 +446,14 @@ def daily_factor_summaries(daily: pd.DataFrame, factors: pd.DataFrame) -> pd.Dat
         target[rows] = (v + by_stock.shift(1) + by_stock.shift(2)).to_numpy()
     l3 = ~np.isnan(l3x)
 
+    px = [ones, mkt, *(d[c].to_numpy() for c in lags)]
+    pdm = ~np.isnan(y) & np.all([~np.isnan(x) for x in px], axis=0)
+    delay = {"pd_yy": total(y * y, pdm)}
+    delay |= {f"pd_xy{i}": total(px[i] * y, pdm) for i in range(PRICE_DELAY_K)}
+    for i in range(PRICE_DELAY_K):
+        for j in range(i, PRICE_DELAY_K):
+            delay[f"pd_xx{i}{j}"] = total(px[i] * px[j], pdm)
+
     out = pd.DataFrame(
         {
             "xret_n": total(ones),
@@ -453,6 +478,7 @@ def daily_factor_summaries(daily: pd.DataFrame, factors: pd.DataFrame) -> pd.Dat
             "l3m_sum": total(l3m, l3),
             "l3m_sumsq": total(l3m * l3m, l3),
             "l3x_l3m_sum": total(l3x * l3m, l3),
+            **delay,
         },
         index=index,
     )

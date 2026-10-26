@@ -162,6 +162,10 @@ FEATURE_ACRONYMS = {
     "beta_fp": "BetaFP",
     # Step 69: tail risk beta
     "beta_tail_risk": "BetaTailRisk",
+    # Step 70: price delay
+    "price_delay_rsq": "PriceDelayRsq",
+    "price_delay_slope": "PriceDelaySlope",
+    "price_delay_tstat": "PriceDelayTstat",
 }
 
 
