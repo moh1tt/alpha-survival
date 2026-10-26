@@ -489,6 +489,7 @@ def market_tail_index(daily: pd.DataFrame) -> pd.Series:
 # Extra per-month daily summaries for price/trading signals (see build_monthly_returns).
 TREND_LAGS = [3, 5, 10, 20, 50, 100, 200, 400, 600, 800, 1000]  # Han, Zhou & Zhu (2016)
 TREND_COLUMNS = [f"trend_ma_{n}" for n in TREND_LAGS]
+TREND_BLOCK = 1000  # trading days per running-sum block; >= the longest window
 
 
 def trend_moving_averages(daily: pd.DataFrame) -> pd.DataFrame:
@@ -497,22 +498,32 @@ def trend_moving_averages(daily: pd.DataFrame) -> pd.DataFrame:
     that day's close; indexed by (permaticker, month). `daily` sorted by permaticker
     and date. Ratios of `close` values only, so later split adjustments cancel.
 
-    Running sums over the whole sorted table, read at each stock's own rows: a
-    window starting before the stock's first row is cut at that row.
+    Running sums restart at each stock and every `TREND_BLOCK` of its days, and a
+    window spans at most two blocks. One running sum over the whole table loses
+    every normal stock to rounding: backward split adjustment puts some closes near
+    1e19 (BINI, after repeated reverse splits), and 1e19 + 15 - 1e19 = 0 in floats.
+    Blocks keep each sum to a few years of one stock's prices.
     """
     close = daily["close"].to_numpy(float)
     valid = ~np.isnan(close)
-    total = np.concatenate([[0.0], np.cumsum(np.where(valid, close, 0.0))])
-    count = np.concatenate([[0], np.cumsum(valid)])
+    filled = np.where(valid, close, 0.0)
+    count = np.concatenate([[0], np.cumsum(valid)])  # integers: exact over any span
     pos = np.arange(len(daily))
     first = pd.Series(pos).groupby(daily["permaticker"].to_numpy()).transform("min").to_numpy()
+    block = (pos - first) // TREND_BLOCK
+    blocks = pd.Series(filled).groupby([first, block])
+    running = blocks.cumsum().to_numpy()  # within the block, this row included
+    block_total = blocks.transform("sum").to_numpy()
     keys = daily[["permaticker", "month"]]
     rows = pos[~keys.duplicated(keep="last").to_numpy()]
     out = {}
     for n, name in zip(TREND_LAGS, TREND_COLUMNS, strict=True):
         lo = np.maximum(rows - n + 1, first[rows])
+        head = filled[lo] - running[lo]  # minus the block's days before lo
+        same = block[lo] == block[rows]
+        total = np.where(same, running[rows] + head, block_total[lo] + head + running[rows])
         days = count[rows + 1] - count[lo]
-        mean = (total[rows + 1] - total[lo]) / np.where(days > 0, days, np.nan)
+        mean = total / np.where(days > 0, days, np.nan)
         out[name] = mean / close[rows]
     index = pd.MultiIndex.from_frame(keys.iloc[rows])
     return pd.DataFrame(out, index=index)

@@ -1075,3 +1075,25 @@ def test_trend_moving_averages_by_hand():
     assert out.loc[(1, feb), "trend_ma_1000"] == pytest.approx(12.5 / 15.0)
     # BBB's window never reaches back into AAA's rows.
     assert out.loc[(2, feb), "trend_ma_1000"] == pytest.approx(250.0 / 3 / 50.0)
+
+
+def test_trend_moving_averages_survive_absurd_prices_and_long_histories():
+    # Backward split adjustment leaves closes near 1e19 for some stocks; one running
+    # sum over the table then rounds every later stock's windows to 0.
+    days = pd.bdate_range("2010-01-01", periods=2600)
+    huge = price_rows("HUGE", days, [7.5e19] * 2600)
+    rng = np.random.default_rng(0)
+    closes = 10 + rng.uniform(0, 5, 2600)
+    closes[:5] = 1e15  # its own absurd start must not ruin its later windows
+    normal = price_rows("NORM", days, closes)
+    out = real.build_monthly_returns(pd.concat([huge, normal]), master_for("HUGE", "NORM"))
+    last = out[out["permaticker"] == 2].iloc[-1]
+    assert last["trend_ma_1000"] == pytest.approx(closes[-1000:].mean() / closes[-1])
+    assert last["trend_ma_3"] == pytest.approx(closes[-3:].mean() / closes[-1])
+    assert out.loc[out["permaticker"] == 1, "trend_ma_1000"].to_numpy() == pytest.approx(1.0)
+    # Windows that span two blocks (days 1000-1999 and 2000-2599) agree with a direct mean.
+    month_ends = out[out["permaticker"] == 2].set_index("last_trade_date")["trend_ma_200"]
+    series = pd.Series(closes, index=days)
+    for date in month_ends.index[[60, 95, 110]]:
+        window = series.loc[:date].iloc[-200:]
+        assert month_ends.loc[date] == pytest.approx(window.mean() / series.loc[date])
