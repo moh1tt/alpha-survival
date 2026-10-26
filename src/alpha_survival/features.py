@@ -10,7 +10,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from alpha_survival.data.real import PRICE_DELAY_COLUMNS, PRICE_DELAY_K, PRICE_DELAY_LAGS
+from alpha_survival.data.real import (
+    PRICE_DELAY_COLUMNS,
+    PRICE_DELAY_K,
+    PRICE_DELAY_LAGS,
+    TREND_COLUMNS,
+)
 from alpha_survival.ols import group_ols, solve_normal_equations
 
 # 12-1 momentum compounds the monthly returns of t-11 .. t-1: from the close at
@@ -2420,6 +2425,57 @@ def add_approximate_accounting(panel: pd.DataFrame, factors: pd.DataFrame) -> pd
     rds = change("equity") - change("accoci") - (_usd(panel, "netinc") - preferred)
     rds = rds + common - issued
     return _with(panel, frontier=frontier, gr_ltnoa=gr_ltnoa, ms=ms, oscore=oscore, rds=rds)
+
+
+TREND_MIN_PRICE = 5.0  # TrendFactor: regression sample, price >= $5
+TREND_SIZE_QUANTILE = 0.10  # TrendFactor: and market cap >= the NYSE 10th percentile
+TREND_BETA_MONTHS = 12  # TrendFactor: expected slopes = mean of the last 12 months'
+
+
+def add_trend_factor(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `trend_factor` (Han, Zhou & Zhu 2016; OSAP's code).
+
+    Each month s, a cross-sectional regression (with intercept) of next month's
+    return on the 11 moving-average ratios `trend_ma_*` (data.real), over stocks
+    priced >= $5 with market cap >= that month's NYSE 10th percentile. The
+    signal at t is sum_L EBeta_L x trend_ma_L at t, with EBeta_L the mean slope over
+    the regressions of months t-12 .. t-1 (any of them): slopes that predict, applied
+    to today's trend. A month's regression needs more stocks than its 12
+    coefficients. Month t-1's regression uses the return of month t, known at
+    month_end; nothing later. NYSE membership is today's exchange (see
+    data.real.add_industry_codes).
+    """
+    panel = _sorted_by_stock(panel)
+    keys = panel[["permaticker", "month_end"]]
+    months = panel["month_end"]
+    rets = _calendar_grid(keys.assign(v=panel["ret"]), "v")
+    next_ret = pd.Series(_at_rows(rets.shift(-1), keys, rets), index=panel.index)
+    mcap = panel["market_cap"]
+    nyse_cap = mcap.where(panel["exchange"] == "NYSE")
+    cutoff = nyse_cap.groupby(months).transform("quantile", TREND_SIZE_QUANTILE)
+    mas = panel[TREND_COLUMNS]
+    use = (
+        next_ret.notna()
+        & mas.notna().all(axis=1)
+        & (panel["close_unadj"] >= TREND_MIN_PRICE)
+        & (mcap >= cutoff)
+    ).to_numpy()
+    codes, labels = pd.factorize(months, sort=True)
+    x = np.column_stack([np.ones(len(panel)), mas.to_numpy()])
+    y = next_ret.to_numpy()
+    # lstsq, not group_ols's normal equations: the 11 ratios all sit near 1 and move
+    # together, too collinear for its singularity test. Where they are exactly
+    # collinear, lstsq's minimum-norm slopes stand in for Stata dropping a column.
+    betas = np.full((len(labels), x.shape[1]), np.nan)
+    for code, rows in pd.Series(np.flatnonzero(use)).groupby(codes[use]):
+        if len(rows) > x.shape[1]:
+            betas[code] = np.linalg.lstsq(x[rows], y[rows], rcond=None)[0]
+    betas = pd.DataFrame(betas, index=labels)
+    calendar = pd.date_range(labels.min(), labels.max(), freq="ME")
+    expected = betas.reindex(calendar).shift(1).rolling(TREND_BETA_MONTHS, min_periods=1).mean()
+    slopes = expected.reindex(months).to_numpy()[:, 1:]
+    signal = (slopes * mas.to_numpy()).sum(axis=1)  # NaN unless all 11 terms exist
+    return _with(panel, trend_factor=signal)
 
 
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:

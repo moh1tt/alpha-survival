@@ -216,6 +216,8 @@ FEATURE_ACRONYMS = {
     "ms": "MS",
     "oscore": "OScore",
     "rds": "RDS",
+    # Step 82: trend factor
+    "trend_factor": "TrendFactor",
 }
 
 

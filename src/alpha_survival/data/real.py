@@ -230,6 +230,8 @@ def build_monthly_returns(
       estimates (`corwin_schultz_spread`), for the BidAskSpread signal.
     - `market_tail`: the month's tail index of all stocks' daily returns pooled
       (`market_tail_index`), the same on every row of the month.
+    - `trend_ma_3` .. `trend_ma_1000`: moving averages of the close over the last
+      3 .. 1000 trading days over the month-end close (`trend_moving_averages`).
 
     With daily `factors` (`data.external.daily_factors`), also the factor-regression
     summaries of `daily_factor_summaries` (`FACTOR_SUMMARY_COLUMNS`).
@@ -285,6 +287,7 @@ def build_monthly_returns(
         )
     )
 
+    moments = moments.join(trend_moving_averages(daily), validate="one_to_one")
     moments["market_tail"] = (
         moments.index.get_level_values("month").map(market_tail_index(daily)).to_numpy()
     )
@@ -484,6 +487,37 @@ def market_tail_index(daily: pd.DataFrame) -> pd.Series:
 
 
 # Extra per-month daily summaries for price/trading signals (see build_monthly_returns).
+TREND_LAGS = [3, 5, 10, 20, 50, 100, 200, 400, 600, 800, 1000]  # Han, Zhou & Zhu (2016)
+TREND_COLUMNS = [f"trend_ma_{n}" for n in TREND_LAGS]
+
+
+def trend_moving_averages(daily: pd.DataFrame) -> pd.DataFrame:
+    """`TREND_COLUMNS`: each stock's mean split-adjusted close over its last 3, 5, ..,
+    1000 trading days (all it has, if fewer), at the month's last trading day, over
+    that day's close; indexed by (permaticker, month). `daily` sorted by permaticker
+    and date. Ratios of `close` values only, so later split adjustments cancel.
+
+    Running sums over the whole sorted table, read at each stock's own rows: a
+    window starting before the stock's first row is cut at that row.
+    """
+    close = daily["close"].to_numpy(float)
+    valid = ~np.isnan(close)
+    total = np.concatenate([[0.0], np.cumsum(np.where(valid, close, 0.0))])
+    count = np.concatenate([[0], np.cumsum(valid)])
+    pos = np.arange(len(daily))
+    first = pd.Series(pos).groupby(daily["permaticker"].to_numpy()).transform("min").to_numpy()
+    keys = daily[["permaticker", "month"]]
+    rows = pos[~keys.duplicated(keep="last").to_numpy()]
+    out = {}
+    for n, name in zip(TREND_LAGS, TREND_COLUMNS, strict=True):
+        lo = np.maximum(rows - n + 1, first[rows])
+        days = count[rows + 1] - count[lo]
+        mean = (total[rows + 1] - total[lo]) / np.where(days > 0, days, np.nan)
+        out[name] = mean / close[rows]
+    index = pd.MultiIndex.from_frame(keys.iloc[rows])
+    return pd.DataFrame(out, index=index)
+
+
 DAILY_SUMMARY_COLUMNS = [
     "dret_max",
     "dret_sumcube",
@@ -497,6 +531,7 @@ DAILY_SUMMARY_COLUMNS = [
     "cs_sum",
     "cs_n",
     "market_tail",
+    *TREND_COLUMNS,
 ]
 
 
@@ -841,16 +876,18 @@ def add_market_cap(panel: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_industry_codes(panel: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
-    """Add `sic_code` (Standard Industrial Classification) and `fama_industry`
-    (Sharadar's Fama-French 48-industry name, e.g. "Banking").
+    """Add `sic_code` (Standard Industrial Classification), `fama_industry`
+    (Sharadar's Fama-French 48-industry name, e.g. "Banking") and `exchange`
+    (the listing exchange, e.g. "NYSE", for NYSE size breakpoints).
 
     CAUTION: Sharadar keeps only the CURRENT codes, so a firm that changed industry
     carries its latest code back through its history: a mild look-ahead. Use them
     only where a replication needs an industry (e.g. dropping financials, SIC
     6000-6999, or industry averages) and flag those signals as approximate.
-    Industry changes are rare.
+    Industry changes are rare. The same goes for `exchange` (a stock that moved
+    from NASDAQ to NYSE counts as NYSE throughout).
     """
-    codes = master[["permaticker", "sic_code", "fama_industry"]]
+    codes = master[["permaticker", "sic_code", "fama_industry", "exchange"]]
     return panel.merge(codes, on="permaticker", how="left", validate="many_to_one")
 
 

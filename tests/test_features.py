@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from alpha_survival import features
+from alpha_survival.data.real import TREND_COLUMNS
 
 
 def panel_for(permaticker, rets, start="2023-01-31"):
@@ -2538,3 +2539,68 @@ def test_approximate_accounting_ignores_later_months():
     a, b = (d.loc[d["month_end"] == t, names] for d in (a, b))
     assert a[["frontier", "gr_ltnoa", "rds"]].notna().all().all()
     pd.testing.assert_frame_equal(a, b)
+
+
+def trend_panel(n_firms=30, n_months=15, seed=0):
+    rng = np.random.default_rng(seed)
+    months = pd.date_range("2000-01-31", periods=n_months, freq="ME")
+    panel = pd.DataFrame([(s, m) for s in range(1, n_firms + 1) for m in months])
+    panel.columns = ["permaticker", "month_end"]
+    panel["ret"] = rng.normal(0.01, 0.08, len(panel))
+    panel["market_cap"] = rng.uniform(100, 1000, len(panel))
+    panel["close_unadj"] = 20.0
+    panel["exchange"] = "NYSE"
+    for col in TREND_COLUMNS:
+        panel[col] = rng.uniform(0.8, 1.2, len(panel))
+    return panel, months
+
+
+def trend_betas(panel, months):
+    """Each month's slopes of next month's return on the 11 MAs, by lstsq."""
+    wide_ret = panel.pivot(index="month_end", columns="permaticker", values="ret")
+    betas = []
+    for s in range(len(months) - 1):
+        now = panel[panel["month_end"] == months[s]].set_index("permaticker")
+        keep = now["market_cap"] >= now["market_cap"].quantile(0.10)
+        x = np.column_stack([np.ones(keep.sum()), now.loc[keep, TREND_COLUMNS]])
+        y = wide_ret.iloc[s + 1][keep[keep].index].to_numpy()
+        betas.append(np.linalg.lstsq(x, y, rcond=None)[0][1:])
+    return np.array(betas)
+
+
+def test_trend_factor_applies_the_mean_of_the_last_12_months_slopes():
+    panel, months = trend_panel()
+    out = features.add_trend_factor(panel)
+    betas = trend_betas(panel, months)
+    for t, past in [(14, betas[2:14]), (1, betas[:1])]:
+        now = panel[panel["month_end"] == months[t]].set_index("permaticker")
+        expected = now[TREND_COLUMNS].to_numpy() @ past.mean(axis=0)
+        got = out[out["month_end"] == months[t]]["trend_factor"]
+        assert got.to_numpy() == pytest.approx(expected)
+    assert out.loc[out["month_end"] == months[0], "trend_factor"].isna().all()
+
+
+def test_trend_factor_sample_keeps_big_priced_stocks_only():
+    panel, months = trend_panel()
+    # A penny stock's outsized returns cannot move the slopes.
+    panel.loc[panel["permaticker"] == 1, "close_unadj"] = 1.0
+    moved = panel.copy()
+    moved.loc[moved["permaticker"] == 1, "ret"] = 5.0
+    a = features.add_trend_factor(panel)
+    b = features.add_trend_factor(moved)
+    rest = a["permaticker"] != 1
+    assert a["trend_factor"].notna().any()
+    pd.testing.assert_series_equal(a.loc[rest, "trend_factor"], b.loc[rest, "trend_factor"])
+
+
+def test_trend_factor_ignores_later_months():
+    # Leakage test: returns, MAs and caps after month t cannot move month t.
+    panel, months = trend_panel(n_months=18)
+    t = months[14]
+    wild = panel.copy()
+    later = wild["month_end"] > t
+    wild.loc[later, ["ret", "market_cap", *TREND_COLUMNS]] = 9.0
+    a = features.add_trend_factor(panel).loc[lambda d: d["month_end"] == t, "trend_factor"]
+    b = features.add_trend_factor(wild).loc[lambda d: d["month_end"] == t, "trend_factor"]
+    assert a.notna().all()
+    pd.testing.assert_series_equal(a, b)

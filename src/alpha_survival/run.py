@@ -52,6 +52,7 @@ from alpha_survival.features import (
     add_seasonality,
     add_size,
     add_tail_risk_beta,
+    add_trend_factor,
     add_trend_price_age,
     add_turnover_signals,
     add_valuation_ratios,
@@ -175,7 +176,7 @@ def prepare(panel: pd.DataFrame, factors: pd.DataFrame | None = None) -> pd.Data
     panel = add_dividend_signals(add_earnings_surprises(add_abnormal_accruals(panel)))
     panel = add_intangible_returns(add_ipo_signals(add_event_signals(panel)))
     panel = add_organisation_quality(add_more_accounting_signals(panel, factors), factors)
-    panel = add_approximate_accounting(panel, factors)
+    panel = add_trend_factor(add_approximate_accounting(panel, factors))
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
 

@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from alpha_survival import run
-from alpha_survival.data.real import PRICE_DELAY_K
+from alpha_survival.data.real import PRICE_DELAY_K, TREND_COLUMNS
 from alpha_survival.models import HistoricalMean
 from alpha_survival.run import (
     COST_BPS,
@@ -93,6 +93,9 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["share_volume"] = rng.uniform(1e5, 1e7, len(panel))
     panel["dollar_volume"] = panel["share_volume"] * panel["close_split_adj"]
     panel["investable"] = True
+    panel["exchange"] = "NYSE"
+    for col in TREND_COLUMNS:
+        panel[col] = rng.uniform(0.8, 1.2, len(panel))
     panel["n_zero_volume"] = rng.integers(0, 3, len(panel))
     panel["taxliabilities"] = panel["assets"] * rng.uniform(0, 0.05, len(panel))
     panel["eps"] = panel["netinc"] / panel["sharesbas"]
@@ -233,7 +236,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 153
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 154
 
 
 def test_prepare_ranks_among_investable_stocks_only():

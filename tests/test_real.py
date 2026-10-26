@@ -65,6 +65,7 @@ def test_industry_codes_join_each_stock_its_own_codes():
     out = real.add_industry_codes(panel, master)
     assert out["sic_code"].iloc[:3].tolist() == [3571.0, 6022.0, 6022.0]
     assert out["fama_industry"].iloc[:3].tolist() == ["Computers", "Banking", "Banking"]
+    assert out["exchange"].iloc[:3].notna().all()
     assert out[["sic_code", "fama_industry"]].iloc[3].isna().all()  # not in the master
     assert len(out) == len(panel)
 
@@ -1057,3 +1058,20 @@ def test_action_months_flag_exchange_moves_and_spinoffs():
     assert aaa["exch_upgrade"].tolist() == [1.0, 0.0]
     assert out.loc[(202, pd.Timestamp("2020-05-31")), "spun_off"] == 1.0
     assert out["div_amount"].isna().all()
+
+
+def test_trend_moving_averages_by_hand():
+    dates = ["2024-01-29", "2024-01-30", "2024-01-31", "2024-02-01", "2024-02-02", "2024-02-29"]
+    closes = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0]
+    a = price_rows("AAA", dates, closes)
+    b = price_rows("BBB", dates[3:], [100.0, 100.0, 50.0])  # starts in February
+    out = real.build_monthly_returns(pd.concat([a, b]), master_for("AAA", "BBB"))
+    out = out.set_index(["permaticker", "month_end"])
+    jan, feb = pd.Timestamp("2024-01-31"), pd.Timestamp("2024-02-29")
+    assert out.loc[(1, jan), "trend_ma_3"] == pytest.approx(11.0 / 12.0)
+    assert out.loc[(1, jan), "trend_ma_5"] == pytest.approx(11.0 / 12.0)  # only 3 days yet
+    assert out.loc[(1, feb), "trend_ma_3"] == pytest.approx(14.0 / 15.0)
+    assert out.loc[(1, feb), "trend_ma_5"] == pytest.approx(13.0 / 15.0)
+    assert out.loc[(1, feb), "trend_ma_1000"] == pytest.approx(12.5 / 15.0)
+    # BBB's window never reaches back into AAA's rows.
+    assert out.loc[(2, feb), "trend_ma_1000"] == pytest.approx(250.0 / 3 / 50.0)
