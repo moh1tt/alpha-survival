@@ -186,6 +186,9 @@ FEATURE_ACRONYMS = {
     "div_omit": "DivOmit",
     "div_season": "DivSeason",
     "div_yield_st": "DivYieldST",
+    # Step 76: exchange switches and spin-offs
+    "exch_switch": "ExchSwitch",
+    "spinoff": "Spinoff",
 }
 
 

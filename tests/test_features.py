@@ -1989,3 +1989,44 @@ def test_dividend_signals_ignore_later_months():
     b = features.add_dividend_signals(wild).loc[lambda d: d["month_end"] == t, cols]
     assert a.notna().all().all()
     pd.testing.assert_frame_equal(a, b)
+
+
+def event_panel(n_months=40):
+    months = pd.date_range("2020-01-31", periods=n_months, freq="ME")
+    panel = pd.DataFrame([(s, m) for s in [1, 2, 3] for m in months])
+    panel.columns = ["permaticker", "month_end"]
+    for col in ["exch_change", "exch_upgrade", "spun_off"]:
+        panel[col] = np.nan
+    at = lambda s, i: (panel["permaticker"] == s) & (panel["month_end"] == months[i])  # noqa: E731
+    panel.loc[at(1, 5), ["exch_change", "exch_upgrade"]] = 1.0  # stock 1 moves up at 5
+    panel.loc[at(2, 5), ["exch_change", "exch_upgrade"]] = 1.0  # stock 2 moves up at 5 ...
+    panel.loc[at(2, 9), "exch_change"] = 1.0  # ... and down again at 9
+    panel.loc[at(3, 10), "spun_off"] = 1.0
+    return panel
+
+
+def test_exch_switch_flags_twelve_months_after_a_move_up():
+    out = features.add_event_signals(event_panel())
+    s1, s2 = div_series(out, 1, "exch_switch"), div_series(out, 2, "exch_switch")
+    assert s1.tolist() == [0.0] * 5 + [1.0] * 12 + [0.0] * 23
+    assert s2.tolist() == [0.0] * 5 + [1.0] * 4 + [0.0] * 31  # the later move undoes it
+    assert div_series(out, 3, "exch_switch").eq(0).all()
+
+
+def test_spinoff_flags_24_months_after_the_spin():
+    out = features.add_event_signals(event_panel())
+    assert div_series(out, 3, "spinoff").tolist() == [0.0] * 10 + [1.0] * 24 + [0.0] * 6
+    assert div_series(out, 1, "spinoff").eq(0).all()
+
+
+def test_event_signals_ignore_later_months():
+    # Leakage test: an event after month t cannot move month t.
+    panel = event_panel()
+    wild = panel.copy()
+    wild.loc[wild["month_end"] > "2020-08-31", ["exch_change", "spun_off"]] = 1.0
+    t = panel["month_end"] == "2020-08-31"
+    cols = ["exch_switch", "spinoff"]
+    a = features.add_event_signals(panel).loc[t.to_numpy(), cols]
+    b = features.add_event_signals(wild)
+    pd.testing.assert_frame_equal(a, b.loc[b["month_end"] == "2020-08-31", cols])
+    assert a["exch_switch"].sum() == 2

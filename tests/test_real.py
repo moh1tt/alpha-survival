@@ -1038,3 +1038,22 @@ def test_action_months_only_use_earlier_dividends():
     a = real.build_action_months(base, master)
     b = real.build_action_months(later, master).iloc[:2]
     pd.testing.assert_frame_equal(a, b.reset_index(drop=True))
+
+
+def test_action_months_flag_exchange_moves_and_spinoffs():
+    rows = [
+        ("AAA", "exchangefrom", "2020-03-02", "NASDAQ"),
+        ("AAA", "exchangeto", "2020-03-02", "NYSE"),  # up
+        ("AAA", "exchangefrom", "2021-06-01", "NYSE"),
+        ("AAA", "exchangeto", "2021-06-01", "OTC"),  # down
+        ("BBB", "spunofffrom", "2020-05-04", "AAA PARENT"),
+    ]
+    actions = pd.DataFrame(rows, columns=["ticker", "action", "date", "contraname"])
+    actions = actions.assign(date=pd.to_datetime(actions["date"]), value=np.nan)
+    master = real.build_security_master(raw_tickers())
+    out = real.build_action_months(actions, master).set_index(["permaticker", "month_end"])
+    aaa = out.loc[101]
+    assert aaa["exch_change"].tolist() == [1.0, 1.0]
+    assert aaa["exch_upgrade"].tolist() == [1.0, 0.0]
+    assert out.loc[(202, pd.Timestamp("2020-05-31")), "spun_off"] == 1.0
+    assert out["div_amount"].isna().all()

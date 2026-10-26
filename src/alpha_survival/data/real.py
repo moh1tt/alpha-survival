@@ -860,33 +860,62 @@ DIVIDEND_FREQUENCIES = [(1, 2), (4, 3), (8, 4), (14, 5)]  # monthly, quarterly, 
 UNKNOWN_FREQUENCY = 0  # first dividend, or a gap over 14 months
 
 
+# ExchSwitch: moves to a more prestigious exchange (Dharan & Ikenberry 1995).
+EXCHANGE_UPGRADES = {("NYSEMKT", "NYSE"), ("NASDAQ", "NYSE"), ("NASDAQ", "NYSEMKT")}
+ACTION_MONTH_COLUMNS = ["div_amount", "div_freq", "exch_change", "exch_upgrade", "spun_off"]
+
+
 def build_action_months(actions: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
-    """Per (permaticker, month_end) with a dividend: `div_amount`, the sum of the
-    month's cash dividends per share (Sharadar's are split-adjusted like `close`, so
-    divide by `close_split_adj`), and `div_freq`, a CRSP-style frequency code from
-    the months since the previous dividend month (`DIVIDEND_FREQUENCIES`; the first
-    dividend, or one after 14 months, is `UNKNOWN_FREQUENCY`). Dated by the ex-date,
-    so known by that month's end; uses only that and earlier dividends.
-    Sharadar does not mark special dividends: all count, unlike OSAP's ordinary ones.
+    """Per (permaticker, month_end) with a corporate action we use (Sharadar ACTIONS):
+
+    - `div_amount`: the sum of the month's cash dividends per share (Sharadar's are
+      split-adjusted like `close`, so divide by `close_split_adj`); `div_freq`: a
+      CRSP-style frequency code from the months since the previous dividend month
+      (`DIVIDEND_FREQUENCIES`; the first dividend, or one after 14 months, is
+      `UNKNOWN_FREQUENCY`). Dated by the ex-date. Sharadar does not mark special
+      dividends: all count, unlike OSAP's ordinary ones.
+    - `exch_change`: 1 if the stock changed exchange this month (any pair, OTC
+      included); `exch_upgrade`: 1 if the move was up (`EXCHANGE_UPGRADES`).
+    - `spun_off`: 1 if the stock was spun off from another company this month.
+    Other columns NaN. Each uses that month's and earlier actions only.
     """
     ids = master.set_index("ticker")["permaticker"]
-    div = actions.loc[actions["action"] == "dividend", ["ticker", "date", "value"]]
-    div = div.assign(permaticker=div["ticker"].map(ids), month=div["date"].dt.to_period("M"))
-    months = (
-        div.dropna(subset=["permaticker", "value"])
-        .groupby(["permaticker", "month"], as_index=False)["value"]
-        .sum()
-        .rename(columns={"value": "div_amount"})
-    )
+    acts = actions.assign(
+        permaticker=actions["ticker"].map(ids), month=actions["date"].dt.to_period("M")
+    ).dropna(subset=["permaticker"])
+    keys = ["permaticker", "month"]
+
+    div = acts[(acts["action"] == "dividend") & acts["value"].notna()]
+    months = div.groupby(keys, as_index=False)["value"].sum()
+    months = months.rename(columns={"value": "div_amount"})
     index = months["month"].dt.year * 12 + months["month"].dt.month
     gap = index - index.groupby(months["permaticker"]).shift(1)
     freq = pd.Series(UNKNOWN_FREQUENCY, index=months.index)
     for limit, code in reversed(DIVIDEND_FREQUENCIES):
         freq[gap <= limit] = code
     months["div_freq"] = freq
-    months["month_end"] = months.pop("month").dt.to_timestamp(how="end").dt.normalize()
-    months["permaticker"] = months["permaticker"].astype("int64")
-    return months[["permaticker", "month_end", "div_amount", "div_freq"]]
+
+    def exchanges(action: str, name: str) -> pd.DataFrame:
+        rows = acts.loc[acts["action"] == action].reindex(columns=[*keys, "date", "contraname"])
+        return rows.rename(columns={"contraname": name})
+
+    moves = exchanges("exchangefrom", "old").merge(
+        exchanges("exchangeto", "new"), on=[*keys, "date"], how="outer"
+    )
+    pairs = zip(moves["old"], moves["new"], strict=True)
+    moves["exch_upgrade"] = [float(pair in EXCHANGE_UPGRADES) for pair in pairs]
+    moves = moves.groupby(keys, as_index=False).agg(exch_upgrade=("exch_upgrade", "max"))
+    moves["exch_change"] = 1.0
+
+    spun = acts.loc[acts["action"] == "spunofffrom", keys].drop_duplicates()
+    out = months.merge(moves, on=keys, how="outer").merge(
+        spun.assign(spun_off=1.0), on=keys, how="outer"
+    )
+    out["month_end"] = out.pop("month").dt.to_timestamp(how="end").dt.normalize()
+    out["permaticker"] = out["permaticker"].astype("int64")
+    return out[["permaticker", "month_end", *ACTION_MONTH_COLUMNS]].sort_values(
+        ["permaticker", "month_end"], ignore_index=True
+    )
 
 
 def add_action_months(panel: pd.DataFrame, action_months: pd.DataFrame) -> pd.DataFrame:

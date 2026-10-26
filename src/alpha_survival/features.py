@@ -1796,6 +1796,48 @@ def add_dividend_signals(panel: pd.DataFrame) -> pd.DataFrame:
     return _with(panel, **out)
 
 
+EXCH_SWITCH_MONTHS = 12  # ExchSwitch: moved up an exchange within the last 12 months
+SPINOFF_MONTHS = 24  # Spinoff: spun off within the last 24 months
+
+
+def add_event_signals(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `exch_switch` and `spinoff` from Sharadar's corporate actions
+    (`exch_change`, `exch_upgrade`, `spun_off`: data.real.build_action_months).
+
+    - `exch_switch`: 1 if the stock's latest exchange change, in months t-11 .. t,
+      was a move up (Nasdaq or NYSE MKT to NYSE, Nasdaq to NYSE MKT), else 0
+      (ExchSwitch; Dharan & Ikenberry 1995). OSAP compares CRSP's monthly exchange
+      codes with the last 12 months' instead; the same up to moves within a month.
+    - `spinoff`: 1 if the stock was spun off from another company in months
+      t-23 .. t, else 0 (Spinoff; Cusatis, Miles & Woolridge 1993). OSAP flags
+      CRSP spin-off companies in their first 24 months, which is about the same.
+    Events up to month_end only.
+    """
+    panel = _sorted_by_stock(panel)
+    keys = panel[["permaticker", "month_end"]]
+
+    def grid(column: str) -> pd.DataFrame:
+        return _calendar_grid(keys.assign(v=panel[column].fillna(0)), "v")
+
+    change, upgrade, spun = grid("exch_change"), grid("exch_upgrade"), grid("spun_off")
+    exists = change.notna()
+    month = np.arange(len(change))[:, None]
+
+    def last_event(events: pd.DataFrame) -> pd.DataFrame:
+        """The grid row of each stock's latest event so far (NaN before the first)."""
+        at = np.where(events.to_numpy() > 0, month, np.nan)
+        return pd.DataFrame(at, index=events.index, columns=events.columns).ffill()
+
+    last_upgrade = last_event(upgrade)
+    recent = (month - last_upgrade < EXCH_SWITCH_MONTHS) & (last_upgrade == last_event(change))
+    spinoff = spun.rolling(SPINOFF_MONTHS, min_periods=1).max() > 0
+    return _with(
+        panel,
+        exch_switch=_at_rows(recent.astype(float).where(exists), keys, change),
+        spinoff=_at_rows(spinoff.astype(float).where(exists), keys, change),
+    )
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 
