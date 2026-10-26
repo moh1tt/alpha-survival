@@ -175,6 +175,7 @@ def test_evaluate_scores_each_model_the_right_way():
     long_lags += ["composite_debt_issuance", "share_iss_5y"]  # 60 and 65 months
     long_lags += ["residual_momentum"]  # 36-month fits, then 11 residuals: 46 months
     long_lags += ["beta_tail_risk"]  # 72 months
+    long_lags += ["firm_age_mom"]  # every fixture stock has the same age: no youngest fifth
     empty = table.loc[signals, "n_forecasts"] == 0
     assert set(empty[empty].index) <= {f"signal_{c}" for c in long_lags}
     assert table.loc[empty[empty].index, "mean_ic"].isna().all()
