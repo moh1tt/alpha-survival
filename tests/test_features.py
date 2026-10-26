@@ -1491,3 +1491,34 @@ def test_coskew_acx_and_beta_fp_ignore_later_months():
     b = features.add_coskew_acx_beta_fp(wild).loc[t, cols]
     assert a.notna().all()
     pd.testing.assert_series_equal(a, b)
+
+
+def tail_panel(n_months=130, seed=0):
+    rng = np.random.default_rng(seed)
+    months = pd.date_range("2000-01-31", periods=n_months, freq="ME")
+    tail = pd.Series(rng.uniform(0.3, 0.6, n_months), index=months)
+    rets = 0.2 * tail.to_numpy() + rng.normal(0, 0.05, n_months)
+    panel = panel_for(1, rets, start=months[0])
+    return panel.assign(market_tail=panel["month_end"].map(tail)), tail
+
+
+def test_beta_tail_risk_by_hand_over_120_months():
+    panel, tail = tail_panel()
+    out = features.add_tail_risk_beta(panel)
+    window = slice(10, 130)  # the last 120 months
+    expected = ols_by_hand(panel["ret"].to_numpy()[window], tail.to_numpy()[window])[1]
+    assert out["beta_tail_risk"].iloc[-1] == pytest.approx(expected)
+    assert out["beta_tail_risk"].iloc[:71].isna().all()  # >= 72 months
+    assert out["beta_tail_risk"].iloc[71:].notna().all()
+
+
+def test_beta_tail_risk_ignores_later_months():
+    # Leakage test: later returns and later tail values cannot move month t.
+    panel, _ = tail_panel()
+    t = 100
+    wild = panel.copy()
+    wild.loc[t + 1 :, ["ret", "market_tail"]] = 9.0
+    wild["fwd_ret"] = 9.0
+    a = features.add_tail_risk_beta(panel).loc[t, "beta_tail_risk"]
+    b = features.add_tail_risk_beta(wild).loc[t, "beta_tail_risk"]
+    assert a == pytest.approx(b)

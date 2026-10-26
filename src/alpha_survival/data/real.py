@@ -227,6 +227,8 @@ def build_monthly_returns(
     - `n_trade_days`: days with a price row; `n_zero_volume`: those with no volume.
     - `cs_sum`, `cs_n`: sum and count of the month's Corwin-Schultz day-pair
       estimates (`corwin_schultz_spread`), for the BidAskSpread signal.
+    - `market_tail`: the month's tail index of all stocks' daily returns pooled
+      (`market_tail_index`), the same on every row of the month.
 
     With daily `factors` (`data.external.daily_factors`), also the factor-regression
     summaries of `daily_factor_summaries` (`FACTOR_SUMMARY_COLUMNS`).
@@ -282,6 +284,9 @@ def build_monthly_returns(
         )
     )
 
+    moments["market_tail"] = (
+        moments.index.get_level_values("month").map(market_tail_index(daily)).to_numpy()
+    )
     if factors is not None:
         moments = moments.join(daily_factor_summaries(daily, factors), validate="one_to_one")
 
@@ -454,6 +459,22 @@ def daily_factor_summaries(daily: pd.DataFrame, factors: pd.DataFrame) -> pd.Dat
     return out
 
 
+TAIL_QUANTILE = 0.05  # Kelly & Jiang (2014): the worst 5% of the month's daily returns
+
+
+def market_tail_index(daily: pd.DataFrame) -> pd.Series:
+    """Per month: the Hill tail index of every stock's daily return pooled, the mean of
+    log(r / p5) over returns r <= p5, with p5 the 5th percentile (Kelly & Jiang 2014;
+    OSAP's code). Fatter left tails give a larger value. `daily`: month, dret.
+    Uses only the month's own days, so it is known at the month's end.
+    """
+    rets = daily[["month", "dret"]].dropna()
+    p5 = rets.groupby("month")["dret"].quantile(TAIL_QUANTILE)
+    cut = rets["month"].map(p5)
+    tail = rets[(rets["dret"] <= cut) & (cut < 0)]
+    return np.log(tail["dret"] / tail["month"].map(p5)).groupby(tail["month"]).mean()
+
+
 # Extra per-month daily summaries for price/trading signals (see build_monthly_returns).
 DAILY_SUMMARY_COLUMNS = [
     "dret_max",
@@ -467,6 +488,7 @@ DAILY_SUMMARY_COLUMNS = [
     "n_zero_volume",
     "cs_sum",
     "cs_n",
+    "market_tail",
 ]
 
 

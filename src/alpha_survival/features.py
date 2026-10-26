@@ -1383,6 +1383,22 @@ def add_coskew_acx_beta_fp(panel: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+TAIL_MONTHS, TAIL_MIN = 120, 72  # BetaTailRisk: >= 72 of the last 120 months
+
+
+def add_tail_risk_beta(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `beta_tail_risk`: the slope of the stock's monthly return (raw, as OSAP) on
+    the market tail index (`market_tail`, data.real.market_tail_index) over the last
+    120 calendar months, >= 72 (BetaTailRisk; Kelly & Jiang 2014). Both are known at
+    each month's end. Our data start in Dec 1997, so the first values are in 2003.
+    """
+    panel = _sorted_by_stock(panel)
+    rets = _calendar_grid(panel, "ret")
+    tail = panel.groupby("month_end")["market_tail"].first().reindex(rets.index)
+    fit = _rolling_ols(rets, tail.to_frame("tail"), TAIL_MONTHS, TAIL_MIN)
+    return _with(panel, beta_tail_risk=_at_rows(fit["tail"], panel, rets))
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 

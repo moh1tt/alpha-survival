@@ -948,3 +948,26 @@ def test_log_and_three_day_sums_by_hand():
     assert row["l3x_l3m_sum"] == pytest.approx((x3 * m3)[feb].sum())
     jan = out.loc[(1, pd.Period("2024-01", "M"))]
     assert jan["l3_n"] == (~feb).sum() - 2  # the first two days have no 3-day return
+
+
+def test_market_tail_index_by_hand():
+    rng = np.random.default_rng(3)
+    rets = rng.normal(0, 0.03, 400)  # 20 stocks x 20 days, pooled
+    daily = pd.DataFrame({"month": pd.Period("2024-01", "M"), "dret": rets})
+    p5 = np.quantile(rets, 0.05)
+    worst = rets[rets <= p5]
+    expected = np.log(worst / p5).mean()
+    got = real.market_tail_index(daily)
+    assert got.loc[pd.Period("2024-01", "M")] == pytest.approx(expected)
+    assert expected > 0
+
+
+def test_market_tail_index_uses_each_months_own_days():
+    # Leakage test: a crash in February cannot change January's index.
+    rng = np.random.default_rng(4)
+    months = [pd.Period("2024-01", "M")] * 200 + [pd.Period("2024-02", "M")] * 200
+    calm = pd.DataFrame({"month": months, "dret": rng.normal(0, 0.02, 400)})
+    crash = calm.copy()
+    crash.loc[200:, "dret"] = -0.5 + rng.normal(0, 0.1, 200)
+    jan = pd.Period("2024-01", "M")
+    assert real.market_tail_index(calm)[jan] == real.market_tail_index(crash)[jan]

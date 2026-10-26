@@ -39,6 +39,7 @@ from alpha_survival.features import (
     add_reversal,
     add_seasonality,
     add_size,
+    add_tail_risk_beta,
     add_trend_price_age,
     add_turnover_signals,
     add_valuation_ratios,
@@ -157,7 +158,7 @@ def prepare(panel: pd.DataFrame, factors: pd.DataFrame | None = None) -> pd.Data
     if factors is None:
         factors = monthly_factors()
     panel = add_residual_momentum_coskewness(add_factor_betas(panel, factors), factors)
-    panel = add_coskew_acx_beta_fp(add_daily_factor_signals(panel))
+    panel = add_tail_risk_beta(add_coskew_acx_beta_fp(add_daily_factor_signals(panel)))
     panel = panel[panel["investable"]].reset_index(drop=True)
     return rank_normalise(panel, RAW_FEATURES)
 

@@ -111,7 +111,10 @@ def make_panel(seed: int = 0) -> pd.DataFrame:
     panel["lx_lm_sum"] = panel["l3x_l3m_sum"] = rng.normal(0, 0.001, len(panel))
     panel["lx_lm2_sum"] = rng.normal(0, 1e-5, len(panel))
     panel["l3_n"] = 21
-    return panel
+    panel["market_tail"] = panel["month_end"].map(
+        dict(zip(MONTHS, rng.uniform(0.3, 0.6, N_MONTHS), strict=True))
+    )
+    return panel.copy()  # one block: column-by-column inserts fragment the frame
 
 
 def test_prepare_computes_features_before_dropping_uninvestable_rows():
@@ -152,6 +155,7 @@ def test_evaluate_scores_each_model_the_right_way():
     long_lags += ["mom_offseason_11y", "mom_offseason_16y"]
     long_lags += ["composite_debt_issuance", "share_iss_5y"]  # 60 and 65 months
     long_lags += ["residual_momentum"]  # 36-month fits, then 11 residuals: 46 months
+    long_lags += ["beta_tail_risk"]  # 72 months
     empty = table.loc[signals, "n_forecasts"] == 0
     assert set(empty[empty].index) <= {f"signal_{c}" for c in long_lags}
     assert table.loc[empty[empty].index, "mean_ic"].isna().all()
@@ -205,7 +209,7 @@ def test_published_signs_come_from_the_catalogue_and_match_the_papers():
     original = {"mom_12_1": 1, "log_mcap": -1, "bm": 1, "rev_1m": -1, "gp_a": 1}
     original |= {"asset_growth": -1, "vol_3m": -1}
     assert {f: PUBLISHED_SIGN[f] for f in original} == original
-    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 110
+    assert len(RAW_FEATURES) == len(set(RAW_FEATURES)) == 111
 
 
 def test_prepare_ranks_among_investable_stocks_only():

@@ -160,6 +160,8 @@ FEATURE_ACRONYMS = {
     # Step 68: daily log-return coskewness and Frazzini-Pedersen beta
     "coskew_acx": "CoskewACX",
     "beta_fp": "BetaFP",
+    # Step 69: tail risk beta
+    "beta_tail_risk": "BetaTailRisk",
 }
 
 
