@@ -210,6 +210,12 @@ FEATURE_ACRONYMS = {
     "org_cap": "OrgCap",
     "ps": "PS",
     "rd_ability": "RDAbility",
+    # Step 81: approximations (Sharadar lacks some Compustat items)
+    "frontier": "Frontier",
+    "gr_ltnoa": "GrLTNOA",
+    "ms": "MS",
+    "oscore": "OScore",
+    "rds": "RDS",
 }
 
 

@@ -2379,3 +2379,162 @@ def test_organisation_quality_ignores_later_months():
     a, b = (d.loc[d["month_end"] == t, cols] for d in (a, b))
     assert a["org_cap"].notna().all()
     pd.testing.assert_frame_equal(a, b)
+
+
+APPROX_COLUMNS = ["equity", "revenue", "assets", "assetsc", "assetsnc", "liabilities"]
+APPROX_COLUMNS += ["liabilitiesc", "liabilitiesnc", "debtc", "debtnc", "ppnenet", "ebitda"]
+APPROX_COLUMNS += ["assets_q", "revenue_q"]
+APPROX_SMALL = ["netinc", "ncfo", "rnd", "cashneq", "investmentsc", "investmentsnc"]
+APPROX_SMALL += ["depamor", "accoci", "prefdivis", "netinc_q"]
+
+
+def approx_panel(n_firms=20, n_months=13, seed=0):
+    rng = np.random.default_rng(seed)
+    months = pd.date_range("2000-01-31", periods=n_months, freq="ME")
+    panel = pd.DataFrame([(s, m) for s in range(1, n_firms + 1) for m in months])
+    panel.columns = ["permaticker", "month_end"]
+    for col in APPROX_COLUMNS:
+        panel[col] = rng.uniform(50, 150, len(panel))
+    for col in APPROX_SMALL:
+        panel[col] = rng.normal(5, 5, len(panel))
+    panel["capex"] = -rng.uniform(1, 20, len(panel))
+    panel["rnd"] = rng.uniform(1, 20, len(panel))  # positive: stock 2's zero is the lowest
+    panel["ncfdiv"] = -rng.uniform(0, 5, len(panel))
+    panel["sharesbas"] = rng.uniform(9, 11, len(panel))
+    panel["close_unadj"] = rng.uniform(10, 50, len(panel))
+    panel["market_cap"] = rng.uniform(100, 1000, len(panel))
+    panel["fxusd"] = 1.0
+    panel["sic_code"] = 3571.0
+    panel["fama_industry"] = np.where(panel["permaticker"] % 2, "Computers", "Chips")
+    factors = pd.DataFrame({"gnpdef": np.linspace(100, 110, n_months)}, index=months)
+    return panel, factors, months
+
+
+def test_frontier_is_the_pooled_industry_fit_minus_log_market_cap():
+    panel, factors, months = approx_panel(n_months=4)
+    out = features.add_approximate_accounting(panel, factors)
+    x = np.column_stack(
+        [
+            np.log(panel["equity"]),
+            panel["debtnc"] / panel["assets"],
+            -panel["capex"] / panel["revenue"],
+            panel["rnd"] / panel["revenue"],
+            panel["ppnenet"] / panel["assets"],
+            panel["ebitda"] / panel["assets"],
+            panel["fama_industry"] == "Computers",
+            panel["fama_industry"] == "Chips",
+        ]
+    ).astype(float)
+    y = np.log(panel["market_cap"]).to_numpy()
+    for t in [0, 3]:  # month t's fit uses months 0 .. t: all within 60 months
+        fit_rows = (panel["month_end"] <= months[t]).to_numpy()
+        beta = np.linalg.lstsq(x[fit_rows], y[fit_rows], rcond=None)[0]
+        now = (panel["month_end"] == months[t]).to_numpy()
+        got = out.loc[out["month_end"] == months[t], "frontier"]  # both in stock order
+        expected = x[now] @ beta - y[now]
+        assert got.to_numpy() == pytest.approx(expected)
+
+
+def test_gr_ltnoa_by_hand():
+    panel, factors, months = approx_panel()
+    out = features.add_approximate_accounting(panel, factors)
+    now, then = row(panel, 1, months[12]), row(panel, 1, months[0])
+
+    def noa(r):
+        assets = (
+            r["assetsc"] - r["cashneq"] - r["investmentsc"] + r["assetsnc"] - r["investmentsnc"]
+        )
+        return assets - (r["liabilitiesc"] - r["debtc"] + r["liabilitiesnc"] - r["debtnc"])
+
+    def wc(r):
+        return r["assetsc"] - r["cashneq"] - r["investmentsc"] - (r["liabilitiesc"] - r["debtc"])
+
+    accrual = (wc(now) - wc(then) - now["depamor"]) / ((now["assets"] + then["assets"]) / 2)
+    expected = noa(now) / now["assets"] - noa(then) / then["assets"] - accrual
+    assert row(out, 1, months[12])["gr_ltnoa"] == pytest.approx(expected)
+    assert np.isnan(row(out, 1, months[11])["gr_ltnoa"])
+
+
+def test_oscore_flags_the_top_decile_against_deciles_one_to_seven():
+    panel, factors, months = approx_panel()
+    panel.loc[panel["permaticker"] == 20, "sic_code"] = 6022.0  # a bank: excluded
+    out = features.add_approximate_accounting(panel, factors)
+    now = panel[panel["month_end"] == months[12]].set_index("permaticker")
+    then = panel[panel["month_end"] == months[0]].set_index("permaticker")
+    ni, ni0 = now["netinc"], then["netinc"]
+    score = (
+        -1.32
+        - 0.407 * np.log(now["assets"] / 110)
+        + 6.03 * now["liabilities"] / now["assets"]
+        - 1.43 * (now["assetsc"] - now["liabilitiesc"]) / now["assets"]
+        + 0.076 * now["liabilitiesc"] / now["assetsc"]
+        - 1.72 * (now["liabilities"] > now["assets"])
+        - 2.37 * ni / now["assets"]
+        - 1.83 * now["ncfo"] / now["liabilities"]
+        + 0.285 * ((ni + ni0) < 0)
+        - 0.521 * (ni - ni0) / (ni.abs() + ni0.abs())
+    ).drop(20)
+    decile = pd.qcut(score, 10, labels=False) + 1
+    expected = pd.Series(np.nan, index=now.index)
+    expected[decile[decile == 10].index] = 1.0
+    expected[decile[decile <= 7].index] = 0.0
+    got = out[out["month_end"] == months[12]].set_index("permaticker")["oscore"]
+    pd.testing.assert_series_equal(got, expected, check_names=False)
+
+
+def test_ms_scores_growth_firms_against_industry_medians():
+    panel, factors, months = approx_panel(n_months=25)
+    rng = np.random.default_rng(3)
+    growth = panel["permaticker"] <= 4  # market cap far above book: lowest B/M fifth
+    panel.loc[growth, "market_cap"] = 1e5
+    one, two = panel["permaticker"] == 1, panel["permaticker"] == 2
+    # Stock 1 beats the growth firms' medians everywhere; stock 2 loses everywhere.
+    panel.loc[one, ["netinc", "ncfo", "rnd", "capex"]] = [50.0, 60.0, 50.0, -80.0]
+    panel.loc[one, ["netinc_q", "assets_q", "revenue_q"]] = [10.0, 100.0, 100.0]
+    panel.loc[two, ["netinc", "ncfo", "rnd", "capex"]] = [-50.0, -60.0, 0.0, 0.0]
+    panel.loc[two, "netinc_q"] = rng.normal(0, 100, two.sum())
+    panel.loc[two, "revenue_q"] = rng.uniform(1, 1000, two.sum())
+    out = features.add_approximate_accounting(panel, factors)
+    got = out[out["month_end"] == months[24]].set_index("permaticker")["ms"]
+    assert got.loc[1] == 6  # 7 points, pooled into 6
+    assert got.loc[2] == 1  # 0 points, pooled into 1
+    assert got.loc[[3, 4]].between(1, 6).all()
+    assert got.loc[5:].isna().all()  # not growth firms
+    panel.loc[panel["permaticker"] == 4, "sic_code"] = 2834.0  # SIC 35 keeps 3 firms
+    out = features.add_approximate_accounting(panel, factors)
+    assert out.loc[out["permaticker"] == 4, "ms"].isna().all()  # alone in SIC 28
+    panel.loc[panel["permaticker"] == 3, "sic_code"] = 2834.0  # SIC 35 down to 2 firms
+    out = features.add_approximate_accounting(panel, factors)
+    assert out.loc[out["permaticker"] <= 2, "ms"].isna().all()
+
+
+def test_rds_is_the_dirty_surplus_left_in_book_equity():
+    panel, factors, months = approx_panel()
+    out = features.add_approximate_accounting(panel, factors)
+    now, then = row(panel, 1, months[12]), row(panel, 1, months[0])
+    common = -now["ncfdiv"] - now["prefdivis"]
+    expected = (
+        (now["equity"] - then["equity"])
+        - (now["accoci"] - then["accoci"])
+        - (now["netinc"] - now["prefdivis"])
+        + common
+        - now["close_unadj"] * (now["sharesbas"] - then["sharesbas"])
+    )
+    assert row(out, 1, months[12])["rds"] == pytest.approx(expected)
+
+
+def test_approximate_accounting_ignores_later_months():
+    # Leakage test: later filings, caps, prices and deflators cannot move month t.
+    panel, factors, months = approx_panel(n_months=28)
+    t = months[24]
+    wild, wild_factors = panel.copy(), factors.copy()
+    later = wild["month_end"] > t
+    cols = ["equity", "assets", "netinc", "ncfo", "market_cap", "netinc_q", "revenue_q"]
+    wild.loc[later, cols + ["close_unadj", "sharesbas", "capex"]] = 1e6
+    wild_factors.loc[wild_factors.index > t, "gnpdef"] = 1.0
+    names = ["frontier", "gr_ltnoa", "ms", "oscore", "rds"]
+    a = features.add_approximate_accounting(panel, factors)
+    b = features.add_approximate_accounting(wild, wild_factors)
+    a, b = (d.loc[d["month_end"] == t, names] for d in (a, b))
+    assert a[["frontier", "gr_ltnoa", "rds"]].notna().all().all()
+    pd.testing.assert_frame_equal(a, b)

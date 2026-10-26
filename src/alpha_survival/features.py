@@ -2208,6 +2208,220 @@ def add_organisation_quality(panel: pd.DataFrame, factors: pd.DataFrame) -> pd.D
     return _with(panel, org_cap=org_cap, ps=ps, rd_ability=ability.where(top))
 
 
+FRONTIER_MONTHS = 60  # Frontier: pooled fit on this month and the 59 before
+MS_VOL_MONTHS, MS_VOL_MIN = 48, 18  # MS: earnings and sales volatility windows
+MS_MIN_FIRMS = 3  # MS: >= 3 growth firms in the 2-digit SIC industry that month
+MS_RANGE = (1, 6)  # MS: scores below 1 / above 6 pooled into the ends
+OSCORE_EXCLUDED = ((4000, 4999), (6000, 9999))  # OScore: utilities etc., financials, services
+# Ohlson (1980) model 1 coefficients, as in OSAP's code.
+OSCORE_INTERCEPT = -1.32
+OSCORE_COEFS = {
+    "size": -0.407,
+    "leverage": 6.03,
+    "working_capital": -1.43,
+    "current_ratio": 0.076,
+    "liabilities_over_assets": -1.72,
+    "roa": -2.37,
+    "funds_over_liabilities": -1.83,
+    "two_losses": 0.285,
+    "income_change": -0.521,
+}
+
+
+def _rolling_pooled_fit(
+    months: pd.Series, y: pd.Series, xs: list[pd.Series], groups: pd.Series, window: int
+) -> pd.Series:
+    """Fitted values of a pooled OLS of `y` on `xs` plus one dummy per `groups` value,
+    fitted for each month on rows from that month and the `window` - 1 calendar
+    months before it, and applied to that month's rows (rows with `xs` and a group).
+    NaN where nothing can be fitted."""
+    x = pd.concat(xs, axis=1).to_numpy(float)
+    has_x = ~np.isnan(x).any(axis=1) & groups.notna().to_numpy()
+    train = has_x & y.notna().to_numpy()
+    g, _ = pd.factorize(groups)
+    k = x.shape[1] + int(g.max(initial=-1)) + 1
+    month_num = (months.dt.year * 12 + months.dt.month).to_numpy()
+    unique = np.unique(month_num[has_x])
+    by_month = pd.Series(np.arange(len(months))).groupby(month_num).indices
+
+    def design(rows: np.ndarray) -> np.ndarray:
+        d = np.zeros((len(rows), k))
+        d[:, : x.shape[1]] = x[rows]
+        d[np.arange(len(rows)), x.shape[1] + g[rows]] = 1.0
+        return d
+
+    xtx, xty = np.zeros((len(unique), k, k)), np.zeros((len(unique), k))
+    yv = y.to_numpy(float)
+    for i, m in enumerate(unique):
+        rows = by_month[m][train[by_month[m]]]
+        d = design(rows)
+        xtx[i], xty[i] = d.T @ d, d.T @ yv[rows]
+    cum_xtx = np.concatenate([np.zeros((1, k, k)), np.cumsum(xtx, axis=0)])
+    cum_xty = np.concatenate([np.zeros((1, k)), np.cumsum(xty, axis=0)])
+    start = np.searchsorted(unique, unique - window, side="right")
+    fitted = np.full(len(months), np.nan)
+    for i, m in enumerate(unique):
+        a = cum_xtx[i + 1] - cum_xtx[start[i]]
+        b = cum_xty[i + 1] - cum_xty[start[i]]
+        if not a.any():
+            continue
+        beta = np.linalg.lstsq(a, b, rcond=None)[0]
+        rows = by_month[m][has_x[by_month[m]]]
+        fitted[rows] = design(rows) @ beta
+    return pd.Series(fitted, index=y.index)
+
+
+def add_approximate_accounting(panel: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame:
+    """Add `frontier`, `gr_ltnoa`, `ms`, `oscore` and `rds` (OSAP's code), each an
+    APPROXIMATION: Sharadar lacks some Compustat items they use. Latest public
+    filings; lags are the stock's own rows 3 or 12 months earlier. `factors`: monthly
+    `gnpdef` (data.external).
+
+    - `frontier`: log market cap a pooled regression predicts from log book equity,
+      LT debt / assets, capex / sales, R&D / sales, PP&E / assets, EBITDA / assets
+      and Fama-French 48 industry dummies, fit on this month and the 59 before
+      (OSAP's window), minus actual log market cap; positive book only (Frontier;
+      Nguyen & Swanson 2009). Advertising is not in Sharadar: dropped. USD.
+    - `gr_ltnoa`: change over 12 months in net operating assets / assets minus
+      operating accruals over average assets (GrLTNOA; Fairfield, Whisenant & Yohn
+      2003). OSAP's itemised sum (receivables + inventory + PP&E + other current
+      assets + intangibles + other assets - payables - other current and other
+      liabilities) has no Sharadar counterpart item by item; with other current
+      assets = current assets - cash - current investments - receivables - inventory,
+      other assets = non-current assets - PP&E - intangibles - non-current
+      investments, other current liabilities = current liabilities - payables -
+      current debt and other liabilities = non-current liabilities - non-current debt,
+      it equals (current assets - cash - current investments + non-current assets -
+      non-current investments) - (current liabilities - current debt + non-current
+      liabilities - non-current debt), which is what we use.
+    - `ms`: Mohanram's G-score for growth firms (lowest fifth of book-to-market,
+      positive book): 1 point each for ROA, cash-flow ROA (over average quarterly
+      assets now and 3 months ago) and cash flow - net income above, earnings and
+      sales-growth volatility (48 months, >= 18) below, and R&D and capex over last
+      quarter's assets above the month's 2-digit SIC median (>= 3 such firms);
+      pooled to 1 .. 6 (MS; Mohanram 2005). Missing values compare as +infinity, as
+      in OSAP's Stata logic. Trailing-twelve-month flows stand in for OSAP's
+      annualised quarterly means; advertising (not in Sharadar) dropped, so 7
+      points; recomputed monthly, where OSAP refreshes once a year.
+    - `oscore`: Ohlson's O-score from real assets (GNP deflator), leverage, working
+      capital, current ratio, liabilities > assets, ROA, operating cash flow /
+      liabilities (OSAP: funds from operations, else cash flow), two years of losses
+      and the change in net income; 1 for the month's top decile, 0 for deciles 1-7,
+      else NaN; SIC 4000-4999 and 6000+ excluded (OScore; Dichev 1998). Net income
+      stands in for income before extraordinary items.
+    - `rds`: realised dirty-surplus income, the change in book equity not explained
+      by net income less preferred dividends, common dividends and shares issued at
+      today's price: change in book - change in accumulated other comprehensive
+      income - (net income - preferred dividends) + common dividends - close x change
+      in shares, in USD (RDS; Landsman et al. 2011). OSAP's dirty surplus is the
+      change in marketable-securities and translation adjustments plus 0.65 x the
+      pension adjustment; Sharadar has only AOCI, which also holds hedging items.
+      Common dividends = dividends paid - preferred dividends; OSAP's fiscal
+      year-end price is our month-end close.
+    Known at month_end.
+    """
+    panel = _sorted_by_stock(panel)
+    months = panel["month_end"]
+
+    def ago(values: str | pd.Series, lag: int) -> pd.Series:
+        return _months_ago(panel, values, lag)
+
+    def ratio(top: pd.Series, bottom: pd.Series) -> pd.Series:
+        return top / bottom.where(bottom != 0)
+
+    def log_positive(values: pd.Series) -> pd.Series:
+        return np.log(values.where(values > 0))
+
+    mcap = panel["market_cap"].where(panel["market_cap"] > 0)
+    assets, revenue, equity = panel["assets"], panel["revenue"], panel["equity"]
+    book = _usd(panel, "equity")
+
+    regressors = [
+        log_positive(book),
+        ratio(panel["debtnc"], assets),
+        ratio(-panel["capex"], revenue),  # Sharadar capex is a cash outflow: negative
+        ratio(panel["rnd"], revenue),
+        ratio(panel["ppnenet"], assets),
+        ratio(panel["ebitda"], assets),
+    ]
+    log_cap = log_positive(mcap)
+    fit = _rolling_pooled_fit(months, log_cap, regressors, panel["fama_industry"], FRONTIER_MONTHS)
+    frontier = (fit - log_cap).where(equity > 0)
+
+    net = panel["assetsc"] - panel["cashneq"] - panel["investmentsc"]
+    net = net + panel["assetsnc"] - panel["investmentsnc"]
+    net = net - (panel["liabilitiesc"] - panel["debtc"] + panel["liabilitiesnc"] - panel["debtnc"])
+    working = panel["assetsc"] - panel["cashneq"] - panel["investmentsc"]
+    working = working - (panel["liabilitiesc"] - panel["debtc"])
+    accrual = working - ago(working, 12) - panel["depamor"]
+    gr_ltnoa = ratio(net, assets) - ratio(ago(net, 12), ago("assets", 12))
+    gr_ltnoa = gr_ltnoa - ratio(accrual, (assets + ago("assets", 12)) / 2)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        log_bm = np.log(book.where(equity > 0) / mcap)
+    growth_firm = (equity > 0) & (_quantile_bin(log_bm, months, 5) == 1)
+    sic2 = panel["sic_code"] // SIC2
+    groups = [months, sic2]
+    in_group = growth_firm & sic2.notna()
+    count = in_group.groupby(groups).transform("sum")
+    sample = in_group & (count >= MS_MIN_FIRMS)
+    assets_q, assets_q_before = panel["assets_q"], ago("assets_q", 3)
+    avg_q = (assets_q + assets_q_before) / 2
+    roaq = ratio(panel["netinc_q"], assets_q)
+    sales_growth = ratio(panel["revenue_q"], ago("revenue_q", 3))
+    measures = {
+        "roa": (ratio(panel["netinc"], avg_q), ">"),
+        "cfroa": (ratio(panel["ncfo"], avg_q), ">"),
+        "ni_vol": (_own_rolling(panel, roaq, MS_VOL_MONTHS, MS_VOL_MIN, "std"), "<"),
+        "rev_vol": (_own_rolling(panel, sales_growth, MS_VOL_MONTHS, MS_VOL_MIN, "std"), "<"),
+        "rd": (ratio(panel["rnd"].fillna(0), assets_q_before), ">"),
+        "capex": (ratio(-panel["capex"], assets_q_before), ">"),
+    }
+    score = (_stata_value(panel["ncfo"]) > _stata_value(panel["netinc"])).astype(float)
+    for values, side in measures.values():
+        values = values.where(sample)
+        median = values.groupby(groups).transform("median")
+        a, b = _stata_value(values), _stata_value(median)
+        score = score + (a > b if side == ">" else a < b).astype(float)
+    ms = score.clip(*MS_RANGE).where(sample)
+
+    gnp = months.map(factors["gnpdef"])
+    liabilities, current_a, current_l = (
+        panel["liabilities"],
+        panel["assetsc"],
+        panel["liabilitiesc"],
+    )
+    income, income_before = panel["netinc"], ago("netinc", 12)
+    terms = {
+        "size": log_positive(_usd(panel, "assets") / gnp),
+        "leverage": ratio(liabilities, assets),
+        "working_capital": ratio(current_a - current_l, assets),
+        "current_ratio": ratio(current_l, current_a),
+        "liabilities_over_assets": (liabilities > assets).astype(float),
+        "roa": ratio(income, assets),
+        "funds_over_liabilities": ratio(panel["ncfo"], liabilities),
+        "two_losses": ((income + income_before) < 0).astype(float),
+        "income_change": ratio(income - income_before, income.abs() + income_before.abs()),
+    }
+    raw = OSCORE_INTERCEPT + sum(OSCORE_COEFS[n] * v for n, v in terms.items())
+    excluded = np.any([panel["sic_code"].between(*r) for r in OSCORE_EXCLUDED], axis=0)
+    decile = _quantile_bin(raw.where(~excluded & panel["sic_code"].notna()), months, 10)
+    oscore = pd.Series(np.nan, index=panel.index)
+    oscore[decile == 10] = 1.0
+    oscore[decile.between(1, 7)] = 0.0
+
+    def change(column: str) -> pd.Series:
+        usd = _usd(panel, column)
+        return usd - ago(usd, 12)
+
+    preferred = _usd(panel, "prefdivis").fillna(0)
+    common = -_usd(panel, "ncfdiv") - preferred
+    issued = panel["close_unadj"] * (panel["sharesbas"] - ago("sharesbas", 12))
+    rds = change("equity") - change("accoci") - (_usd(panel, "netinc") - preferred)
+    rds = rds + common - issued
+    return _with(panel, frontier=frontier, gr_ltnoa=gr_ltnoa, ms=ms, oscore=oscore, rds=rds)
+
+
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:
     """Add `<col><suffix>`: each month, the stock's rank on `col` mapped to [-1, 1].
 
