@@ -486,7 +486,8 @@ NET_DEBT_MIN_BM = 0.4  # NetDebtPrice: only above the 40th percentile of log B/M
 
 
 def _financial(panel: pd.DataFrame) -> pd.Series:
-    """Banks, insurers, etc. (SIC 6000-6999), by today's SIC code (see data.real.add_sic_code)."""
+    """Banks, insurers, etc. (SIC 6000-6999), by today's SIC code
+    (see data.real.add_industry_codes)."""
     return panel["sic_code"].between(6000, 6999)
 
 
@@ -624,7 +625,7 @@ def add_profitability_ratios(panel: pd.DataFrame) -> pd.DataFrame:
       (Tax; Lev & Nissim 2004). Sharadar gives total tax only, not current vs deferred.
     - `tang`: liquidation-weighted assets (`TANG_WEIGHTS`) / assets, manufacturers
       only (tang; Hahn & Lee 2009). Net PP&E, where OSAP uses gross.
-    Financials and manufacturers by today's SIC code (see data.real.add_sic_code).
+    Financials and manufacturers by today's SIC code (see data.real.add_industry_codes).
     12-month changes use the stock's own row 12 calendar months earlier: no look-ahead.
     """
     panel = _sorted_by_stock(panel)
@@ -1463,6 +1464,48 @@ def add_price_delay(panel: pd.DataFrame) -> pd.DataFrame:
         fit = pd.DataFrame(grid, index=like.index, columns=like.columns)
         added[name] = _at_rows(fit.shift(1).ffill(limit=PD_MONTHS - 1), panel, like)
     return _with(panel, **added)
+
+
+INDMOM_LAGS = (1, 5)  # IndMom: each stock's return over months t-5 .. t-1
+SIC2 = 100  # IndMom: 2-digit SIC industries
+BIG_FIRMS = 0.7  # IndRetBig: the industry's largest 30% by market cap
+
+
+def add_industry_signals(panel: pd.DataFrame) -> pd.DataFrame:
+    """Add `ind_mom` and `ind_ret_big` (OSAP's code). Industries are today's codes
+    (data.real.add_industry_codes), so both are approximate.
+
+    - `ind_mom`: mean over the stocks in the same 2-digit SIC industry this month,
+      weighted by this month's market cap, of each one's compounded return over
+      months t-5 .. t-1 (IndMom; Grinblatt & Moskowitz 1999). As OSAP, a missing
+      return on a row the stock has counts as 0; a month without a row gives NaN.
+    - `ind_ret_big`: the equal-weighted mean return this month of the industry's
+      largest 30% of firms by market cap (percentile rank above 0.7), Fama-French 48
+      industries, given to the other firms; NaN for the big firms themselves
+      (IndRetBig; Hou 2007). News reaches big firms first.
+    Same-month cross-sections over the rows passed in (all stocks, before the
+    investable filter) and the stocks' earlier months: known at month_end.
+    """
+    panel = _sorted_by_stock(panel)
+    rets = _calendar_grid(panel.assign(_r=panel["ret"].fillna(0)), "_r")
+    growth = pd.DataFrame(1.0, index=rets.index, columns=rets.columns)
+    for lag in range(INDMOM_LAGS[0], INDMOM_LAGS[1] + 1):
+        growth = growth * (1 + rets.shift(lag))
+    mom = pd.Series(_at_rows(growth - 1, panel, rets), index=panel.index)
+    mcap = panel["market_cap"].where(panel["market_cap"] > 0)
+    sic2 = [panel["month_end"], panel["sic_code"] // SIC2]
+    use = mom.notna() & mcap.notna()
+    weighted = (mom * mcap).where(use).groupby(sic2).transform("sum")
+    weights = mcap.where(use).groupby(sic2).transform("sum")
+
+    ff48 = [panel["month_end"], panel["fama_industry"]]
+    rank = mcap.groupby(ff48).rank(pct=True)
+    big_ret = panel["ret"].where(rank > BIG_FIRMS).groupby(ff48).transform("mean")
+    return _with(
+        panel,
+        ind_mom=weighted / weights.where(weights > 0),
+        ind_ret_big=big_ret.where(~(rank >= BIG_FIRMS)),
+    )
 
 
 def rank_normalise(panel: pd.DataFrame, columns: list[str], suffix: str = "_rank") -> pd.DataFrame:

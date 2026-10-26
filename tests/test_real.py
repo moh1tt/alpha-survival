@@ -23,6 +23,7 @@ def raw_tickers(**overrides):
                 ["2026-10-12", "2026-10-12", "2009-03-31", "2009-03-31"]
             ),
             "siccode": [3571.0, 3571.0, 6022.0, 6022.0],
+            "famaindustry": ["Computers", "Computers", "Banking", "Banking"],
         }
     )
     for col, values in overrides.items():
@@ -56,14 +57,15 @@ def test_output_uses_our_column_names():
     assert list(master.columns) == list(real.SECURITY_MASTER_COLUMNS.values())
 
 
-def test_sic_code_joins_each_stock_its_own_code():
+def test_industry_codes_join_each_stock_its_own_codes():
     master = real.build_security_master(raw_tickers())
     panel = pd.DataFrame(
         {"permaticker": [101, 202, 202, 303], "month_end": pd.to_datetime(["2020-01-31"] * 4)}
     )
-    out = real.add_sic_code(panel, master)
+    out = real.add_industry_codes(panel, master)
     assert out["sic_code"].iloc[:3].tolist() == [3571.0, 6022.0, 6022.0]
-    assert np.isnan(out["sic_code"].iloc[3])  # not in the master
+    assert out["fama_industry"].iloc[:3].tolist() == ["Computers", "Banking", "Banking"]
+    assert out[["sic_code", "fama_industry"]].iloc[3].isna().all()  # not in the master
     assert len(out) == len(panel)
 
 

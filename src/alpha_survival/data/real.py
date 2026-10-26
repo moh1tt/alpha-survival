@@ -27,6 +27,7 @@ SECURITY_MASTER_COLUMNS = {
     "firstpricedate": "first_price_date",
     "lastpricedate": "last_price_date",
     "siccode": "sic_code",
+    "famaindustry": "fama_industry",
 }
 
 # How `tickers.table` names the stock-price table: row queries say "stocks", the
@@ -858,15 +859,17 @@ def add_market_cap(panel: pd.DataFrame) -> pd.DataFrame:
     return panel.assign(market_cap=panel["close_split_adj"] * shares)
 
 
-def add_sic_code(panel: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
-    """Add `sic_code`: the stock's Standard Industrial Classification code.
+def add_industry_codes(panel: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
+    """Add `sic_code` (Standard Industrial Classification) and `fama_industry`
+    (Sharadar's Fama-French 48-industry name, e.g. "Banking").
 
-    CAUTION: Sharadar keeps only the CURRENT code, so a firm that changed industry
-    carries its latest code back through its history: a mild look-ahead. Use it
+    CAUTION: Sharadar keeps only the CURRENT codes, so a firm that changed industry
+    carries its latest code back through its history: a mild look-ahead. Use them
     only where a replication needs an industry (e.g. dropping financials, SIC
-    6000-6999) and flag those signals as approximate. Industry changes are rare.
+    6000-6999, or industry averages) and flag those signals as approximate.
+    Industry changes are rare.
     """
-    codes = master[["permaticker", "sic_code"]]
+    codes = master[["permaticker", "sic_code", "fama_industry"]]
     return panel.merge(codes, on="permaticker", how="left", validate="many_to_one")
 
 
@@ -887,5 +890,5 @@ def load_panel(
     if quarterly:
         arq = load_fundamentals(monthly, raw_dir, "ARQ", QUARTERLY_FIELDS)
         panel = add_quarterly_fundamentals(panel, arq)
-    panel = add_sic_code(add_market_cap(panel), load_security_master(raw_dir))
+    panel = add_industry_codes(add_market_cap(panel), load_security_master(raw_dir))
     return flag_investable(panel, min_price)

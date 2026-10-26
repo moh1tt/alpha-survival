@@ -166,6 +166,9 @@ FEATURE_ACRONYMS = {
     "price_delay_rsq": "PriceDelayRsq",
     "price_delay_slope": "PriceDelaySlope",
     "price_delay_tstat": "PriceDelayTstat",
+    # Step 71: industry momentum and big-firm industry return
+    "ind_mom": "IndMom",
+    "ind_ret_big": "IndRetBig",
 }
 
 

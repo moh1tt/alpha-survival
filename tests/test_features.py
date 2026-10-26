@@ -1603,3 +1603,68 @@ def test_price_delay_ignores_days_after_the_june_fit():
     got_b = features.add_price_delay(b).set_index("month_end").loc[rows, DELAY_COLS]
     assert got_a.notna().all().all()
     pd.testing.assert_frame_equal(got_a, got_b)
+
+
+def industry_panel(n_months=7, seed=0):
+    """Four stocks over `n_months`: 1-3 in SIC 35xx / FF48 "Computers", 4 in banking."""
+    rng = np.random.default_rng(seed)
+    months = pd.date_range("2020-01-31", periods=n_months, freq="ME")
+    rows = [(s, m) for s in [1, 2, 3, 4] for m in months]
+    panel = pd.DataFrame(rows, columns=["permaticker", "month_end"])
+    panel["ret"] = rng.normal(0.01, 0.05, len(panel))
+    panel["market_cap"] = rng.uniform(1e8, 1e9, len(panel))
+    panel["sic_code"] = panel["permaticker"].map({1: 3571.0, 2: 3572.0, 3: 3579.0, 4: 6022.0})
+    panel["fama_industry"] = np.where(panel["permaticker"] == 4, "Banking", "Computers")
+    return panel
+
+
+def test_ind_mom_is_cap_weighted_six_month_momentum_of_the_sic2_industry():
+    panel = industry_panel()
+    panel.loc[(panel["permaticker"] == 2) & (panel["month_end"] == "2020-03-31"), "ret"] = np.nan
+    out = features.add_industry_signals(panel)
+    t = pd.Timestamp("2020-07-31")
+    moms, caps = [], []
+    for s in [1, 2, 3]:  # stock 4 is a bank: another industry
+        rets = panel.loc[panel["permaticker"] == s, "ret"].fillna(0).to_numpy()
+        moms.append(np.prod(1 + rets[1:6]) - 1)  # months t-5 .. t-1, a missing return as 0
+        caps.append(
+            panel.loc[(panel["permaticker"] == s) & (panel["month_end"] == t), "market_cap"]
+        )
+    expected = np.average(moms, weights=np.concatenate(caps))
+    got = out.loc[out["month_end"] == t].set_index("permaticker")["ind_mom"]
+    assert got.loc[[1, 2, 3]].to_numpy() == pytest.approx([expected] * 3)
+    assert out.loc[out["month_end"] < "2020-06-30", "ind_mom"].isna().all()  # 5 lags needed
+
+
+def test_ind_ret_big_is_the_mean_return_of_the_top_30_percent_for_the_rest():
+    month = pd.Timestamp("2020-01-31")
+    panel = pd.DataFrame(
+        {
+            "permaticker": range(1, 12),
+            "month_end": month,
+            "ret": np.arange(1, 12) / 100,
+            "market_cap": [*range(1, 11), 99.0],  # 1-10 in Computers, 11 a bank
+            "sic_code": [3571.0] * 10 + [6022.0],
+            "fama_industry": ["Computers"] * 10 + ["Banking"],
+        }
+    )
+    out = features.add_industry_signals(panel).set_index("permaticker")["ind_ret_big"]
+    big = np.mean([0.08, 0.09, 0.10])  # ranks 0.8, 0.9, 1.0
+    assert out.loc[1:6].to_numpy() == pytest.approx([big] * 6)
+    assert out.loc[7:10].isna().all()  # rank 0.7 and above: big, or on the edge
+    assert np.isnan(out.loc[11])  # the only bank is its industry's biggest
+
+
+def test_industry_signals_ignore_later_months():
+    # Leakage test: later returns and market caps cannot move month t.
+    panel = industry_panel(n_months=9)
+    t = pd.Timestamp("2020-07-31")
+    wild = panel.copy()
+    later = wild["month_end"] > t
+    wild.loc[later, "ret"] = 9.0
+    wild.loc[later, "market_cap"] = 1.0
+    cols = ["ind_mom", "ind_ret_big"]
+    a = features.add_industry_signals(panel).loc[lambda d: d["month_end"] == t, cols]
+    b = features.add_industry_signals(wild).loc[lambda d: d["month_end"] == t, cols]
+    assert a["ind_mom"].notna().all()
+    pd.testing.assert_frame_equal(a, b)
