@@ -1371,8 +1371,10 @@ def add_coskew_acx_beta_fp(panel: pd.DataFrame) -> pd.DataFrame:
 
     v = summed(cols[:5], FP_VOL_MONTHS)
     days = v["xret_n"]
-    sd_x = np.sqrt((v["lx_sumsq"] - v["lx_sum"] ** 2 / days) / (days - 1))
-    sd_m = np.sqrt((v["lm_sumsq"] - v["lm_sum"] ** 2 / days) / (days - 1))
+    # Sum-of-squares variances can round a hair below 0 for a stock that barely
+    # moves: that is a variance of 0, not a missing one.
+    sd_x = np.sqrt(((v["lx_sumsq"] - v["lx_sum"] ** 2 / days) / (days - 1)).clip(lower=0))
+    sd_m = np.sqrt(((v["lm_sumsq"] - v["lm_sum"] ** 2 / days) / (days - 1)).clip(lower=0))
     ratio = (sd_x / sd_m.where(sd_m > 0)).where(days >= FP_VOL_MIN)
 
     c = summed(cols[7:], FP_CORR_MONTHS)
